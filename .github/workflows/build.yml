@@ -1,0 +1,63 @@
+name: Build SpendTracker IPA
+
+# Trigger manually or on push to main
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    name: Build & Archive
+    runs-on: macos-14          # Apple Silicon Mac hosted by GitHub (free)
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Select Xcode version ──────────────────────────────
+      - name: Select Xcode 15
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+
+      # ── 3. Install CocoaPods (if you add pods later) ─────────
+      # - name: Pod install
+      #   run: pod install --project-directory=SpendTracker
+
+      # ── 4. Build (no signing — ad-hoc) ───────────────────────
+      - name: Build Archive
+        run: |
+          xcodebuild archive \
+            -project SpendTracker/SpendTracker.xcodeproj \
+            -scheme SpendTracker \
+            -configuration Release \
+            -archivePath $RUNNER_TEMP/SpendTracker.xcarchive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            -allowProvisioningUpdates
+
+      # ── 5. Export IPA (ad-hoc, no signing) ───────────────────
+      - name: Export IPA
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath $RUNNER_TEMP/SpendTracker.xcarchive \
+            -exportOptionsPlist SpendTracker/ExportOptions.plist \
+            -exportPath $RUNNER_TEMP/SpendTracker_IPA \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO
+
+      # ── 6. Upload artifact ────────────────────────────────────
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpendTracker-IPA
+          path: ${{ runner.temp }}/SpendTracker_IPA/*.ipa
+          retention-days: 7        # Available for 7 days — download and sideload
+
+      # ── 7. Notify in Actions summary ─────────────────────────
+      - name: Summary
+        run: |
+          echo "## ✅ Build Successful" >> $GITHUB_STEP_SUMMARY
+          echo "Download the IPA from the Artifacts section above." >> $GITHUB_STEP_SUMMARY
+          echo "Then sideload using AltStore or Sideloadly on Windows." >> $GITHUB_STEP_SUMMARY

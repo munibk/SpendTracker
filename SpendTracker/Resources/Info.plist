@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- ── App Identity ───────────────────────────────────────── -->
+    <key>CFBundleName</key>
+    <string>SpendTracker</string>
+    <key>CFBundleDisplayName</key>
+    <string>SpendTracker</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.yourname.spendtracker</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+
+    <!-- ── Minimum OS ─────────────────────────────────────────── -->
+    <key>MinimumOSVersion</key>
+    <string>16.0</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+
+    <!-- ── Privacy Strings ────────────────────────────────────── -->
+    <!-- Required for SMS database read (private entitlement) -->
+    <key>NSContactsUsageDescription</key>
+    <string>SpendTracker needs contacts access to identify bank senders in SMS.</string>
+
+    <key>NSUserTrackingUsageDescription</key>
+    <string>SpendTracker does not track you. All data stays on device.</string>
+
+    <!-- ── Background Modes ───────────────────────────────────── -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>fetch</string>
+        <string>processing</string>
+    </array>
+
+    <!-- ── Background Task Identifiers ───────────────────────── -->
+    <key>BGTaskSchedulerPermittedIdentifiers</key>
+    <array>
+        <string>com.spendtracker.sms.refresh</string>
+    </array>
+
+    <!-- ── Scene Manifest ────────────────────────────────────── -->
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key>
+        <false/>
+        <key>UISceneConfigurations</key>
+        <dict>
+            <key>UIWindowSceneSessionRoleApplication</key>
+            <array>
+                <dict>
+                    <key>UISceneConfigurationName</key>
+                    <string>Default Configuration</string>
+                    <key>UISceneDelegateClassName</key>
+                    <string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+                </dict>
+            </array>
+        </dict>
+    </dict>
+
+    <!-- ── Launch Screen ─────────────────────────────────────── -->
+    <key>UILaunchScreen</key>
+    <dict>
+        <key>UIColorName</key>
+        <string>AccentColor</string>
+    </dict>
+
+    <!-- ── Orientation ───────────────────────────────────────── -->
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
+    </array>
+
+    <!-- ── App Transport Security ────────────────────────────── -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <false/>
+    </dict>
+</dict>
+</plist>

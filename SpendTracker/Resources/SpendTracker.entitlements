@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  SpendTracker.entitlements
+  
+  For a FREE Apple Developer account (sideload via Xcode):
+  ─────────────────────────────────────────────────────────
+  • You cannot add com.apple.private.sms.read (requires paid account)
+  • The app will use the "Manual SMS Import" flow as primary input
+  • Background refresh still works to re-scan if you grant Full Disk Access
+    via a MDM profile (for jailbroken or supervised devices)
+  
+  For PAID Apple Developer account ($99/year):
+  ─────────────────────────────────────────────
+  • Enable the push notifications entitlement below
+  • The SMS database entitlement is a private API and not grantable
+    without a special Apple entitlement (used by apps like Truecaller)
+-->
+<plist version="1.0">
+<dict>
+    <!-- Required for background app refresh -->
+    <key>com.apple.developer.background-task-scheduler</key>
+    <true/>
+
+    <!-- Required for local push notifications -->
+    <key>aps-environment</key>
+    <string>development</string>
+
+    <!-- 
+    PRIVATE ENTITLEMENT — only works on jailbroken or supervised devices
+    Uncomment only if you know what you are doing:
+
+    <key>com.apple.private.sms.read</key>
+    <true/>
+    -->
+</dict>
+</plist>

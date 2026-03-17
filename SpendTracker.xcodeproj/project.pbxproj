@@ -1,0 +1,353 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		AA000001 /* SpendTrackerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000001 /* SpendTrackerApp.swift */; };
+		AA000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000002 /* ContentView.swift */; };
+		AA000003 /* Transaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000003 /* Transaction.swift */; };
+		AA000004 /* MonthlyReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000004 /* MonthlyReport.swift */; };
+		AA000005 /* SMSParserService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000005 /* SMSParserService.swift */; };
+		AA000006 /* SMSReaderService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000006 /* SMSReaderService.swift */; };
+		AA000007 /* CategoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000007 /* CategoryService.swift */; };
+		AA000008 /* PersistenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000008 /* PersistenceService.swift */; };
+		AA000009 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000009 /* NotificationService.swift */; };
+		AA000010 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000010 /* DashboardView.swift */; };
+		AA000011 /* TransactionsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000011 /* TransactionsListView.swift */; };
+		AA000012 /* AddEditTransactionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000012 /* AddEditTransactionView.swift */; };
+		AA000013 /* ChartsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000013 /* ChartsView.swift */; };
+		AA000014 /* ReportsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000014 /* ReportsView.swift */; };
+		AA000015 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000015 /* SettingsView.swift */; };
+		AA000016 /* Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000016 /* Extensions.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		BA000001 /* SpendTrackerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpendTrackerApp.swift; sourceTree = "<group>"; };
+		BA000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		BA000003 /* Transaction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Transaction.swift; sourceTree = "<group>"; };
+		BA000004 /* MonthlyReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonthlyReport.swift; sourceTree = "<group>"; };
+		BA000005 /* SMSParserService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SMSParserService.swift; sourceTree = "<group>"; };
+		BA000006 /* SMSReaderService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SMSReaderService.swift; sourceTree = "<group>"; };
+		BA000007 /* CategoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryService.swift; sourceTree = "<group>"; };
+		BA000008 /* PersistenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceService.swift; sourceTree = "<group>"; };
+		BA000009 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		BA000010 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
+		BA000011 /* TransactionsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransactionsListView.swift; sourceTree = "<group>"; };
+		BA000012 /* AddEditTransactionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddEditTransactionView.swift; sourceTree = "<group>"; };
+		BA000013 /* ChartsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartsView.swift; sourceTree = "<group>"; };
+		BA000014 /* ReportsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportsView.swift; sourceTree = "<group>"; };
+		BA000015 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		BA000016 /* Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Extensions.swift; sourceTree = "<group>"; };
+		BA000017 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		BA000018 /* SpendTracker.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SpendTracker.entitlements; sourceTree = "<group>"; };
+		BA000099 /* SpendTracker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpendTracker.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		MAINGROUP = {
+			isa = PBXGroup;
+			children = (
+				SOURCESGROUP,
+				PRODUCTSGROUP,
+			);
+			sourceTree = "<group>";
+		};
+		PRODUCTSGROUP = {
+			isa = PBXGroup;
+			children = (
+				BA000099 /* SpendTracker.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		SOURCESGROUP = {
+			isa = PBXGroup;
+			children = (
+				APPGROUP,
+				MODELSGROUP,
+				SERVICESGROUP,
+				VIEWSGROUP,
+				EXTENSIONSGROUP,
+				RESOURCESGROUP,
+			);
+			path = SpendTracker;
+			sourceTree = "<group>";
+		};
+		APPGROUP = {
+			isa = PBXGroup;
+			children = (
+				BA000001 /* SpendTrackerApp.swift */,
+				BA000002 /* ContentView.swift */,
+			);
+			name = App;
+			path = App;
+			sourceTree = "<group>";
+		};
+		MODELSGROUP = {
+			isa = PBXGroup;
+			children = (
+				BA000003 /* Transaction.swift */,
+				BA000004 /* MonthlyReport.swift */,
+			);
+			name = Models;
+			path = Models;
+			sourceTree = "<group>";
+		};
+		SERVICESGROUP = {
+			isa = PBXGroup;
+			children = (
+				BA000005 /* SMSParserService.swift */,
+				BA000006 /* SMSReaderService.swift */,
+				BA000007 /* CategoryService.swift */,
+				BA000008 /* PersistenceService.swift */,
+				BA000009 /* NotificationService.swift */,
+			);
+			name = Services;
+			path = Services;
+			sourceTree = "<group>";
+		};
+		VIEWSGROUP = {
+			isa = PBXGroup;
+			children = (
+				BA000010 /* DashboardView.swift */,
+				BA000011 /* TransactionsListView.swift */,
+				BA000012 /* AddEditTransactionView.swift */,
+				BA000013 /* ChartsView.swift */,
+				BA000014 /* ReportsView.swift */,
+				BA000015 /* SettingsView.swift */,
+			);
+			name = Views;
+			sourceTree = "<group>";
+		};
+		EXTENSIONSGROUP = {
+			isa = PBXGroup;
+			children = (
+				BA000016 /* Extensions.swift */,
+			);
+			name = Extensions;
+			path = Extensions;
+			sourceTree = "<group>";
+		};
+		RESOURCESGROUP = {
+			isa = PBXGroup;
+			children = (
+				BA000017 /* Info.plist */,
+				BA000018 /* SpendTracker.entitlements */,
+			);
+			name = Resources;
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		NATIVETARGET = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CONFIGLIST;
+			buildPhases = (
+				SOURCESPHASE,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SpendTracker;
+			productName = SpendTracker;
+			productReference = BA000099 /* SpendTracker.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		PROJECTOBJ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1540;
+				LastUpgradeCheck = 1540;
+				TargetAttributes = {
+					NATIVETARGET = {
+						CreatedOnToolsVersion = 15.4;
+					};
+				};
+			};
+			buildConfigurationList = PROJCONFIGLIST;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = MAINGROUP;
+			productRefGroup = PRODUCTSGROUP;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				NATIVETARGET,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		SOURCESPHASE = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA000001 /* SpendTrackerApp.swift in Sources */,
+				AA000002 /* ContentView.swift in Sources */,
+				AA000003 /* Transaction.swift in Sources */,
+				AA000004 /* MonthlyReport.swift in Sources */,
+				AA000005 /* SMSParserService.swift in Sources */,
+				AA000006 /* SMSReaderService.swift in Sources */,
+				AA000007 /* CategoryService.swift in Sources */,
+				AA000008 /* PersistenceService.swift in Sources */,
+				AA000009 /* NotificationService.swift in Sources */,
+				AA000010 /* DashboardView.swift in Sources */,
+				AA000011 /* TransactionsListView.swift in Sources */,
+				AA000012 /* AddEditTransactionView.swift in Sources */,
+				AA000013 /* ChartsView.swift in Sources */,
+				AA000014 /* ReportsView.swift in Sources */,
+				AA000015 /* SettingsView.swift in Sources */,
+				AA000016 /* Extensions.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		DEBUGCONFIG = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		RELEASECONFIG = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		TARGETDEBUGCONFIG = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = SpendTracker/Resources/SpendTracker.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SpendTracker/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.yourname.spendtracker";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		TARGETRELEASECONFIG = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = SpendTracker/Resources/SpendTracker.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SpendTracker/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.yourname.spendtracker";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		PROJCONFIGLIST = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DEBUGCONFIG,
+				RELEASECONFIG,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CONFIGLIST = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				TARGETDEBUGCONFIG,
+				TARGETRELEASECONFIG,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = PROJECTOBJ;
+}
