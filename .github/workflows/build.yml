@@ -28,7 +28,7 @@ jobs:
       - name: Build Archive
         run: |
           xcodebuild archive \
-            -project SpendTracker/SpendTracker.xcodeproj \
+            -project SpendTracker.xcodeproj \
             -scheme SpendTracker \
             -configuration Release \
             -archivePath $RUNNER_TEMP/SpendTracker.xcarchive \
