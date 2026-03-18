@@ -80,6 +80,19 @@
         <string>UIInterfaceOrientationPortraitUpsideDown</string>
     </array>
 
+    <!-- ── URL Scheme (for Shortcuts automation) ────────────── -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.munibk.spendtracker</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>spendtracker</string>
+            </array>
+        </dict>
+    </array>
+
     <!-- ── App Transport Security ────────────────────────────── -->
     <key>NSAppTransportSecurity</key>
     <dict>

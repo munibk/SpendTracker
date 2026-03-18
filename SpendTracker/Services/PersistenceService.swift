@@ -138,6 +138,13 @@ class TransactionStore: ObservableObject {
         generateReport(for: date)
     }
 
+    func clearAllData() {
+        transactions   = []
+        monthlyReports = []
+        UserDefaults.standard.removeObject(forKey: txKey)
+        UserDefaults.standard.removeObject(forKey: reportKey)
+    }
+
     // MARK: - CSV Export
     func exportCSV(month: Date) -> String {
         let f = DateFormatter(); f.dateFormat = "dd/MM/yyyy HH:mm"
