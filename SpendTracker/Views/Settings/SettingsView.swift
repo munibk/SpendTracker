@@ -1,206 +1,175 @@
 import SwiftUI
 
-// MARK: - Settings View
+// MARK: - Settings View (Ultra Lightweight)
 struct SettingsView: View {
     @EnvironmentObject var store:      TransactionStore
     @EnvironmentObject var smsService: SMSReaderService
-    @State private var showAddBudget     = false
-    @State private var showClearConfirm  = false
-    @State private var editingCategory:  SpendCategory? = nil
+    @State private var showClearAlert  = false
+    @State private var showAddBudget   = false
+    @State private var txnCount:   Int = 0
+    @State private var monthCount: Int = 0
 
     var body: some View {
         NavigationView {
             List {
 
-                // ── SMS Sync ──────────────────────────────────────
+                // ── SMS ───────────────────────────
                 Section(header: Text("SMS Monitoring")) {
-                    HStack {
-                        Label("Background Sync", systemImage: "arrow.clockwise.circle.fill")
-                        Spacer()
-                        Toggle("", isOn: $smsService.isMonitoring)
-                            .labelsHidden()
-                            .onChange(of: smsService.isMonitoring) { val in
-                                if val { smsService.startMonitoring() }
-                                else   { smsService.stopMonitoring()  }
-                            }
+                    Toggle(isOn: $smsService.isMonitoring) {
+                        Label("Auto Sync",
+                              systemImage: "arrow.clockwise.circle")
+                    }
+                    .onChange(of: smsService.isMonitoring) { val in
+                        val ? smsService.startMonitoring()
+                            : smsService.stopMonitoring()
                     }
 
                     HStack {
-                        Label("Status", systemImage: "info.circle")
+                        Text("Status")
                         Spacer()
                         Text(smsService.syncStatus)
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .lineLimit(1)
                     }
-
-                    if let last = smsService.lastSyncDate {
-                        HStack {
-                            Label("Last Sync", systemImage: "clock")
-                            Spacer()
-                            Text(last.formatted(.relative(presentation: .numeric)))
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
                 }
 
-                // ── Budgets ───────────────────────────────────────
-                Section(header: Text("Monthly Budgets")) {
+                // ── Budgets ───────────────────────
+                Section(header: Text("Budgets")) {
                     ForEach(
-                        store.budgets.sorted(by: { $0.value > $1.value }),
+                        store.budgets
+                            .sorted(by: { $0.value > $1.value }),
                         id: \.key
-                    ) { cat, budget in
-                        Button(action: { editingCategory = cat }) {
+                    ) { cat, amt in
+                        NavigationLink(
+                            destination: BudgetDetailView(category: cat)
+                        ) {
                             HStack {
                                 Image(systemName: cat.icon)
                                     .foregroundColor(cat.color)
-                                    .frame(width: 24)
+                                    .frame(width: 22)
                                 Text(cat.rawValue)
-                                    .foregroundColor(.primary)
                                 Spacer()
-                                Text("₹\(Int(budget))")
-                                    .foregroundColor(.secondary)
-                                Image(systemName: "chevron.right")
-                                    .font(.caption)
+                                Text("₹\(Int(amt))")
                                     .foregroundColor(.secondary)
                             }
                         }
                     }
-
                     Button(action: { showAddBudget = true }) {
                         Label("Add Budget", systemImage: "plus.circle")
-                            .foregroundColor(Color(hex: "#6C63FF"))
                     }
                 }
 
-                // ── Stats ─────────────────────────────────────────
+                // ── Stats ─────────────────────────
                 Section(header: Text("Data")) {
                     HStack {
-                        Label("Total Transactions", systemImage: "list.bullet")
+                        Text("All Transactions")
                         Spacer()
-                        Text("\(store.transactions.count)")
-                            .foregroundColor(.secondary)
+                        Text("\(txnCount)").foregroundColor(.secondary)
                     }
-
                     HStack {
-                        Label("This Month", systemImage: "calendar")
+                        Text("This Month")
                         Spacer()
-                        Text("\(store.transactions(for: Date()).count)")
-                            .foregroundColor(.secondary)
+                        Text("\(monthCount)").foregroundColor(.secondary)
                     }
-
                     HStack {
-                        Label("Storage", systemImage: "lock.shield.fill")
+                        Text("Storage")
                         Spacer()
                         Text("Local Only")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
-
-                    Button(role: .destructive, action: { showClearConfirm = true }) {
-                        Label("Clear All Data", systemImage: "trash.fill")
+                    Button(role: .destructive,
+                           action: { showClearAlert = true }) {
+                        Label("Clear All Data", systemImage: "trash")
                     }
                 }
 
-                // ── About ─────────────────────────────────────────
+                // ── About ─────────────────────────
                 Section(header: Text("About")) {
                     HStack {
-                        Label("Version", systemImage: "info.circle")
+                        Text("Version")
                         Spacer()
                         Text("1.0.0").foregroundColor(.secondary)
                     }
                     HStack {
-                        Label("Banks Supported", systemImage: "building.columns.fill")
+                        Text("Banks")
                         Spacer()
-                        Text("25+").foregroundColor(.secondary)
+                        Text("25+ supported").foregroundColor(.secondary)
                     }
                     HStack {
-                        Label("Privacy", systemImage: "hand.raised.fill")
+                        Text("Privacy")
                         Spacer()
-                        Text("No data uploaded").font(.caption).foregroundColor(.secondary)
+                        Text("No data uploaded")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                 }
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Settings")
-
-            // Budget editor sheet
-            .sheet(item: $editingCategory) { cat in
-                BudgetEditorView(category: cat)
+            .onAppear { loadCounts() }
+            .alert("Clear All Data?", isPresented: $showClearAlert) {
+                Button("Clear", role: .destructive) {
+                    store.clearAllData()
+                    loadCounts()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This permanently deletes all transactions. Cannot be undone.")
             }
             .sheet(isPresented: $showAddBudget) {
                 AddBudgetView()
             }
-            .alert("Clear All Data?", isPresented: $showClearConfirm) {
-                Button("Clear", role: .destructive) {
-                    withAnimation {
-                        store.clearAllData()
-                    }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("This will permanently delete all transactions and reports. This cannot be undone.")
-            }
         }
+    }
+
+    private func loadCounts() {
+        txnCount   = store.transactions.count
+        monthCount = store.transactions(for: Date()).count
     }
 }
 
-// MARK: - Budget Editor
-struct BudgetEditorView: View {
+// MARK: - Budget Detail
+struct BudgetDetailView: View {
     @EnvironmentObject var store: TransactionStore
     @Environment(\.dismiss) var dismiss
     let category: SpendCategory
-    @State private var budgetText: String = ""
+    @State private var text = ""
 
     var body: some View {
-        NavigationView {
-            Form {
-                Section {
-                    HStack {
-                        Image(systemName: category.icon)
-                            .foregroundColor(category.color)
-                        Text(category.rawValue)
-                    }
-                }
-                Section(header: Text("Monthly Limit")) {
-                    HStack {
-                        Text("₹")
-                        TextField("Amount", text: $budgetText)
-                            .keyboardType(.numberPad)
-                    }
-                }
-                Section {
-                    let spent = store.transactions(
-                        for: category, month: Date()
-                    ).reduce(0) { $0 + $1.amount }
-                    HStack {
-                        Text("Spent this month")
-                        Spacer()
-                        Text("₹\(Int(spent))")
-                            .foregroundColor(.secondary)
-                    }
+        Form {
+            Section(header: Text("Category")) {
+                HStack {
+                    Image(systemName: category.icon)
+                        .foregroundColor(category.color)
+                    Text(category.rawValue)
                 }
             }
-            .navigationTitle("Edit Budget")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
+
+            Section(header: Text("Monthly Limit")) {
+                HStack {
+                    Text("₹")
+                    TextField("0", text: $text)
+                        .keyboardType(.numberPad)
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") {
-                        if let val = Double(budgetText), val > 0 {
-                            store.setBudget(val, for: category)
-                        }
-                        dismiss()
+            }
+
+            Section {
+                Button("Save") {
+                    if let val = Double(text), val > 0 {
+                        store.setBudget(val, for: category)
                     }
-                    .fontWeight(.semibold)
+                    dismiss()
                 }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .foregroundColor(.blue)
             }
-            .onAppear {
-                budgetText = String(Int(store.budgets[category] ?? 0))
-            }
+        }
+        .navigationTitle(category.rawValue)
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            text = String(Int(store.budgets[category] ?? 0))
         }
     }
 }
@@ -209,8 +178,8 @@ struct BudgetEditorView: View {
 struct AddBudgetView: View {
     @EnvironmentObject var store: TransactionStore
     @Environment(\.dismiss) var dismiss
-    @State private var category:   SpendCategory = .food
-    @State private var budgetText: String = ""
+    @State private var category = SpendCategory.food
+    @State private var text     = ""
 
     var body: some View {
         NavigationView {
@@ -218,7 +187,8 @@ struct AddBudgetView: View {
                 Section(header: Text("Category")) {
                     Picker("Category", selection: $category) {
                         ForEach(SpendCategory.allCases) { cat in
-                            Label(cat.rawValue, systemImage: cat.icon).tag(cat)
+                            Label(cat.rawValue, systemImage: cat.icon)
+                                .tag(cat)
                         }
                     }
                     .pickerStyle(.wheel)
@@ -226,7 +196,7 @@ struct AddBudgetView: View {
                 Section(header: Text("Monthly Limit")) {
                     HStack {
                         Text("₹")
-                        TextField("Amount", text: $budgetText)
+                        TextField("0", text: $text)
                             .keyboardType(.numberPad)
                     }
                 }
@@ -239,18 +209,15 @@ struct AddBudgetView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
-                        if let val = Double(budgetText), val > 0 {
+                        if let val = Double(text), val > 0 {
                             store.setBudget(val, for: category)
                         }
                         dismiss()
                     }
                     .fontWeight(.semibold)
-                    .disabled(budgetText.isEmpty)
+                    .disabled(text.isEmpty)
                 }
             }
         }
     }
 }
-
-// Make SpendCategory conform to Identifiable for .sheet(item:)
-// (already conforms via id: String { rawValue } in Transaction.swift)

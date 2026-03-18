@@ -181,21 +181,34 @@ class TransactionStore: ObservableObject {
     }
 
     private func loadFromDisk() {
-        if let data = UserDefaults.standard.data(forKey: txKey),
-           let decoded = try? JSONDecoder().decode([Transaction].self, from: data) {
-            transactions = decoded
-        }
-        if let data = UserDefaults.standard.data(forKey: reportKey),
-           let decoded = try? JSONDecoder().decode([MonthlyReport].self, from: data) {
-            monthlyReports = decoded
-        }
-        if let data = UserDefaults.standard.data(forKey: budgetKey),
-           let decoded = try? JSONDecoder().decode([String: Double].self, from: data) {
-            budgets = Dictionary(uniqueKeysWithValues:
-                decoded.compactMap { k, v -> (SpendCategory, Double)? in
-                    guard let cat = SpendCategory(rawValue: k) else { return nil }
-                    return (cat, v)
-                })
+        // Load on background thread to prevent UI freeze
+        DispatchQueue.global(qos: .userInitiated).async {
+            var loadedTxns:    [Transaction]    = []
+            var loadedReports: [MonthlyReport]  = []
+            var loadedBudgets: [SpendCategory: Double] = [:]
+
+            if let data = UserDefaults.standard.data(forKey: self.txKey),
+               let decoded = try? JSONDecoder().decode([Transaction].self, from: data) {
+                loadedTxns = decoded
+            }
+            if let data = UserDefaults.standard.data(forKey: self.reportKey),
+               let decoded = try? JSONDecoder().decode([MonthlyReport].self, from: data) {
+                loadedReports = decoded
+            }
+            if let data = UserDefaults.standard.data(forKey: self.budgetKey),
+               let decoded = try? JSONDecoder().decode([String: Double].self, from: data) {
+                loadedBudgets = Dictionary(uniqueKeysWithValues:
+                    decoded.compactMap { k, v -> (SpendCategory, Double)? in
+                        guard let cat = SpendCategory(rawValue: k) else { return nil }
+                        return (cat, v)
+                    })
+            }
+
+            DispatchQueue.main.async {
+                self.transactions   = loadedTxns
+                self.monthlyReports = loadedReports
+                self.budgets        = loadedBudgets
+            }
         }
     }
 
