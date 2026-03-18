@@ -1,11 +1,12 @@
 // URLSchemeHandler.swift
-// Intentionally empty — URL handling is in SpendTrackerApp.swift
-// Shortcuts automation: spendtracker://import?sms=<encoded>&sender=<encoded>
+// URL scheme handling is implemented in SpendTrackerApp.swift
+// Scheme: spendtracker://import?sms=<encoded>&sender=<encoded>
 //
-// iPhone Shortcuts setup:
-// 1. Shortcuts app → Automation → New Automation → Message
-// 2. Filter: Sender contains "HDFC" (or SBI, ICICI, etc.)
-// 3. Action: Get Details of Messages → Body
-// 4. Action: URL → spendtracker://import?sms=[URL Encoded Body]
-// 5. Action: Open URLs
-// 6. Turn OFF "Ask Before Running"
+// iPhone Shortcuts setup for automatic SMS capture:
+// 1. Open Shortcuts → Automation → New Automation → Message
+// 2. Filter: Sender contains "HDFC" (repeat for SBI, ICICI, etc.)
+// 3. Action: "Get Details of Messages" → select "Body"
+// 4. Action: "URL" → type: spendtracker://import?sms=
+// 5. Append "URL Encode" of the message body to the URL
+// 6. Action: "Open URLs"
+// 7. Disable "Ask Before Running"
