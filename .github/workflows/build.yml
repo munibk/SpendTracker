@@ -20,22 +20,21 @@ jobs:
       - name: Select Xcode 15
         run: sudo xcode-select -s /Applications/Xcode_15.4.app
 
-      # ── 3. Install CocoaPods (if you add pods later) ─────────
-      # - name: Pod install
-      #   run: pod install --project-directory=SpendTracker
+      # ── 3. Show file tree for debugging ──────────────────────
+      - name: Show project structure
+        run: find . -type f | sort
 
       # ── 4. Build (no signing — ad-hoc) ───────────────────────
       - name: Build Archive
         run: |
           xcodebuild archive \
-            -project SpendTracker/SpendTracker.xcodeproj \
+            -project SpendTracker.xcodeproj \
             -scheme SpendTracker \
             -configuration Release \
             -archivePath $RUNNER_TEMP/SpendTracker.xcarchive \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            -allowProvisioningUpdates
+            CODE_SIGNING_ALLOWED=NO
 
       # ── 5. Export IPA (ad-hoc, no signing) ───────────────────
       - name: Export IPA
