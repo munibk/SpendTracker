@@ -3,14 +3,14 @@ import BackgroundTasks
 
 @main
 struct SpendTrackerApp: App {
-    
+
     @StateObject private var store = TransactionStore()
     @StateObject private var smsService = SMSReaderService()
-    
+
     init() {
         registerBackgroundTasks()
     }
-    
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -21,60 +21,49 @@ struct SpendTrackerApp: App {
                     smsService.startMonitoring()
                     scheduleBackgroundRefresh()
                 }
+                .onOpenURL { url in
+                    handleIncomingURL(url)
+                }
         }
     }
-    
+
     // MARK: - Background Tasks
     private func registerBackgroundTasks() {
         BGTaskScheduler.shared.register(
             forTaskWithIdentifier: "com.spendtracker.sms.refresh",
             using: nil
         ) { task in
-            self.handleBackgroundSMSRefresh(task: task as! BGAppRefreshTask)
+            guard let refreshTask = task as? BGAppRefreshTask else { return }
+            self.handleBackgroundRefresh(task: refreshTask)
         }
     }
-    
-    private func handleBackgroundSMSRefresh(task: BGAppRefreshTask) {
+
+    private func handleBackgroundRefresh(task: BGAppRefreshTask) {
         scheduleBackgroundRefresh()
-        
-        let operation = SMSRefreshOperation(
-            smsService: smsService,
-            store: store
-        )
-        
-        task.expirationHandler = {
-            operation.cancel()
-        }
-        
-        operation.completionBlock = {
-            task.setTaskCompleted(success: !operation.isCancelled)
-        }
-        
-        OperationQueue.main.addOperation(operation)
+        task.expirationHandler = { task.setTaskCompleted(success: false) }
+        smsService.fetchNewMessages()
+        task.setTaskCompleted(success: true)
     }
-    
+
     private func scheduleBackgroundRefresh() {
-        let request = BGAppRefreshTaskRequest(
-            identifier: "com.spendtracker.sms.refresh"
-        )
-        request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60) // 15 mins
-        
+        let request = BGAppRefreshTaskRequest(identifier: "com.spendtracker.sms.refresh")
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
         try? BGTaskScheduler.shared.submit(request)
     }
-}
 
-// MARK: - Background Operation
-class SMSRefreshOperation: Operation {
-    private let smsService: SMSReaderService
-    private let store: TransactionStore
-    
-    init(smsService: SMSReaderService, store: TransactionStore) {
-        self.smsService = smsService
-        self.store = store
-    }
-    
-    override func main() {
-        guard !isCancelled else { return }
-        smsService.fetchNewMessages()
+    // MARK: - URL Scheme (for Shortcuts automation)
+    func handleIncomingURL(_ url: URL) {
+        guard url.scheme?.lowercased() == "spendtracker",
+              url.host?.lowercased() == "import" else { return }
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let queryItems = components.queryItems else { return }
+        let params = Dictionary(uniqueKeysWithValues:
+            queryItems.compactMap { item -> (String, String)? in
+                guard let v = item.value else { return nil }
+                return (item.name, v)
+            })
+        guard let smsBody = params["sms"]?.removingPercentEncoding else { return }
+        let sender = params["sender"]?.removingPercentEncoding ?? "BANK"
+        _ = smsService.importManualSMS(smsBody, sender: sender)
     }
 }

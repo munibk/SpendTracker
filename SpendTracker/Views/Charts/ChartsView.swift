@@ -427,9 +427,4 @@ struct StatBadge: View {
     }
 }
 
-// Calendar extension
-extension Calendar {
-    func isDateInThisMonth(_ date: Date) -> Bool {
-        isDate(date, equalTo: Date(), toGranularity: .month)
-    }
-}
+
