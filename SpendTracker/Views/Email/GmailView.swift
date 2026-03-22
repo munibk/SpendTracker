@@ -28,33 +28,30 @@ struct GmailView: View {
                         Button(action: fetchEmails) {
                             HStack {
                                 if gmail.isFetching {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                        .frame(width: 20)
+                                    ProgressView().scaleEffect(0.8).frame(width: 20)
                                 } else {
                                     Image(systemName: "envelope.badge")
                                         .foregroundColor(Color(hex: "#6C63FF"))
                                         .frame(width: 20)
                                 }
-                                Text(gmail.isFetching
-                                     ? "Fetching emails..."
-                                     : "Fetch Bank Emails Now")
-                                    .foregroundColor(
-                                        gmail.isFetching ? .secondary : .primary
-                                    )
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(gmail.isFetching ? "Scanning..." : "Fetch Bank Emails")
+                                    Text("Last 2 months only")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
                             }
                         }
                         .disabled(gmail.isFetching)
 
-                        // Re-scan button — clears cache and fetches all
                         Button(action: rescanAllEmails) {
                             HStack {
                                 Image(systemName: "arrow.clockwise.circle")
                                     .foregroundColor(.orange)
                                     .frame(width: 20)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text("Re-scan All Emails")
-                                    Text("Use this if transactions are missing")
+                                    Text("Re-scan Last 2 Months")
+                                    Text("Clears cache and re-imports")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 }
