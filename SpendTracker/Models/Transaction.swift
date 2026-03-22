@@ -139,6 +139,8 @@ enum SpendCategory: String, Codable, CaseIterable, Identifiable {
             return ["debit card", "debit card xx", "dc ending", "debit card no",
                     "pos debit", "debit card payment", "card swipe",
                     "point of sale", "pos purchase"]
+        case .emi:
+            return ["emi","loan emi","installment","home loan","car loan","personal loan",
                     "bajaj finance","hdfc loan","emi paid","equated monthly"]
         case .investment:
             return ["mutual fund","sip","zerodha","groww","upstox","stocks","nse","bse",
