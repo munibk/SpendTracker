@@ -6,7 +6,7 @@ class GmailService: ObservableObject {
 
     static let shared = GmailService()
 
-    private let clientID      = "396449652721-030jr599hc1r67sj22hngg0imt4pha0s.apps.googleusercontent.com"
+    private let clientID      = "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
     private let redirectURI   = "com.yourname.spendtracker:/oauth2callback"
     private let scope         = "https://www.googleapis.com/auth/gmail.readonly"
     private let authEndpoint  = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -149,12 +149,13 @@ class GmailService: ObservableObject {
     // Uses Gmail's -category:promotions to exclude marketing emails
     // ─────────────────────────────────────────────────────────
     private func buildBankQuery(fromTimestamp: Int) -> String {
-        // Exact known transaction alert senders
         let senders = [
             "alerts@axisbank.com",
             "noreply@axisbank.com",
+            "notify@axisbank.com",
             "credit_cards@icicibank.com",
             "autoemail@icicibank.com",
+            "donotreply@icicibank.com",
             "alerts@hdfcbank.net",
             "noreply@hdfcbank.com",
             "sbiatm@sbi.co.in",
@@ -166,19 +167,18 @@ class GmailService: ObservableObject {
             "alerts@federalbank.co.in",
             "alerts@rblbank.com",
             "alerts@idfcfirstbank.com",
-            "donotreply@icicibank.com",
-            "notify@axisbank.com",
         ]
         let fromQuery = senders.map { "from:\($0)" }.joined(separator: " OR ")
 
-        // Subject must contain transaction keywords
-        // This filters out promotional emails from same senders
-        let subjectQuery = "(subject:debited OR subject:credited OR subject:\"transaction alert\" OR subject:\"debit alert\" OR subject:\"credit alert\" OR subject:\"account alert\" OR subject:\"payment\" OR subject:\"INR\" OR subject:\"used for\")"
+        // Broad subject query — catches BOTH debit and credit transactions
+        // Real bank transaction emails use many different subject formats
+        let subjectQuery = "(subject:debited OR subject:credited OR subject:\"transaction alert\" OR subject:\"debit alert\" OR subject:\"credit alert\" OR subject:\"account alert\" OR subject:\"INR\" OR subject:\"used for\" OR subject:\"payment\" OR subject:\"amount credited\" OR subject:\"amount debited\" OR subject:\"money received\" OR subject:\"funds credited\" OR subject:\"neft\" OR subject:\"imps\" OR subject:\"upi\")"
 
-        // Exclude promotional / offer emails explicitly
-        let excludeQuery = "-subject:offer -subject:\"save up to\" -subject:\"get up to\" -subject:\"cashback offer\" -subject:\"reward\" -subject:\"pre-approved\" -subject:\"pre-qualified\" -subject:\"loan offer\" -subject:\"credit card offer\" -subject:\"upgrade\" -category:promotions -category:social"
+        // Exclude promotional emails only
+        let excludeQuery = "-subject:offer -subject:\"save up to\" -subject:\"get up to\" -subject:\"cashback offer\" -subject:\"pre-approved\" -subject:\"pre-qualified\" -subject:\"loan offer\" -subject:\"upgrade\" -category:promotions -category:social"
 
-        return "(\(fromQuery)) \(subjectQuery) \(excludeQuery) after:\(fromTimestamp)"
+        // newer_than:62d — always includes TODAY, timezone safe
+        return "(\(fromQuery)) \(subjectQuery) \(excludeQuery) newer_than:62d"
     }
 
     // ─────────────────────────────────────────────────────────
@@ -190,35 +190,42 @@ class GmailService: ObservableObject {
         let s = subject.lowercased()
         let b = body.lowercased()
 
-        // ── Hard reject — promotional keywords ───────────────
-        let promoKeywords = [
-            "save up to", "get up to", "offer", "cashback offer",
-            "pre-approved", "pre-qualified", "loan offer", "upgrade your card",
-            "apply now", "limited time", "exclusive offer", "special offer",
-            "reward points", "earn up to", "win", "lucky draw",
-            "no cost emi", "0% emi", "zero cost emi",
-            "festive offer", "sale", "discount up to",
-            "refer and earn", "invite", "register now",
-            "click here to apply", "activate now",
+        // ── Hard reject — clear promotional subjects ──────────
+        // Only reject if subject clearly shows it's an offer/promo
+        let promoSubjects = [
+            "save up to", "get up to", "cashback offer",
+            "pre-approved", "pre-qualified", "loan offer",
+            "upgrade your card", "apply now", "limited time",
+            "exclusive offer", "special offer", "earn up to",
+            "lucky draw", "no cost emi", "festive offer",
+            "refer and earn", "activate now", "click here to apply",
         ]
-        for kw in promoKeywords {
-            if s.contains(kw) || b.prefix(200).description.contains(kw) { return false }
+        // Only reject if subject matches (not body — body can have these in disclaimers)
+        for kw in promoSubjects {
+            if s.contains(kw) { return false }
         }
 
-        // ── Must have transaction amount ──────────────────────
-        let hasAmount = b.contains("inr ") || b.contains("rs.") ||
-                        b.contains("rs ") || b.contains("₹") ||
-                        b.contains("debited") || b.contains("credited")
+        // ── Must contain transaction amount ───────────────────
+        let hasAmount = b.contains("inr ")   || b.contains("inr.")  ||
+                        b.contains("rs. ")   || b.contains("rs ")   ||
+                        b.contains("₹")      ||
+                        s.contains("inr")    || s.contains("debited") ||
+                        s.contains("credited")
         guard hasAmount else { return false }
 
-        // ── Must have transaction-specific words ──────────────
-        let txnWords = [
-            "debited", "credited", "transaction", "payment",
-            "a/c", "account", "card", "upi", "imps", "neft",
-            "amount debited", "amount credited", "has been used",
-            "was debited", "was credited", "purchase"
-        ]
-        return txnWords.contains(where: { b.contains($0) })
+        // ── Must have debit OR credit indicator ───────────────
+        let debitWords  = ["debited","debit","withdrawn","withdrawal","spent",
+                           "purchase","payment","used for","auto debit",
+                           "emi","mandate","pos","neft dr","imps dr"]
+        let creditWords = ["credited","credit","received","deposited","refund",
+                           "cashback","reversed","salary","neft cr","imps cr",
+                           "upi cr","money received","funds received",
+                           "amount credited","transfer received"]
+
+        let hasDebit  = debitWords.contains  { b.contains($0) || s.contains($0) }
+        let hasCredit = creditWords.contains { b.contains($0) || s.contains($0) }
+
+        return hasDebit || hasCredit
     }
 
     // ─────────────────────────────────────────────────────────
@@ -232,7 +239,13 @@ class GmailService: ObservableObject {
 
         DispatchQueue.main.async {
             self.isFetching  = true
-            self.fetchStatus = "Scanning last 2 months for transactions..."
+            // Show exact date range so user knows today is included
+            let fmt          = DateFormatter()
+            fmt.dateFormat   = "dd MMM"
+            let twoMonthsAgo = Calendar.current.date(byAdding: .month, value: -2, to: Date()) ?? Date()
+            let from         = fmt.string(from: twoMonthsAgo)
+            let today        = fmt.string(from: Date())
+            self.fetchStatus = "Scanning \(from) → \(today) (today included)..."
         }
 
         validToken { [weak self] token in
@@ -244,11 +257,15 @@ class GmailService: ObservableObject {
                 completion(0); return
             }
 
-            // Exactly 2 months ago from today
-            let twoMonthsAgo = Calendar.current.date(
-                byAdding: .month, value: -2, to: Date()
-            ) ?? Date()
-            let fromTS  = Int(twoMonthsAgo.timeIntervalSince1970)
+            // Exactly 2 months ago from today (inclusive)
+            // Use start of day 2 months ago to avoid timezone issues
+            let cal          = Calendar.current
+            let twoMonthsAgo = cal.date(byAdding: .month, value: -2, to: Date()) ?? Date()
+            let startOfDay   = cal.startOfDay(for: twoMonthsAgo)
+            let fromTS       = Int(startOfDay.timeIntervalSince1970)
+
+            // Use "newer_than:62d" as backup — Gmail native date filter
+            // This guarantees emails from today are always included
             let query   = self.buildBankQuery(fromTimestamp: fromTS)
             let encoded = query.addingPercentEncoding(
                 withAllowedCharacters: .urlQueryAllowed
@@ -366,8 +383,11 @@ class GmailService: ObservableObject {
                     return
                 }
 
-                let full = subject + "\n" + body
-                if let txn = parser.parse(emailBody: full, sender: sender, date: date) {
+                if let txn = parser.parse(
+                    emailBody: subject + "\n" + body,
+                    sender:    sender,
+                    date:      date
+                ) {
                     lock.lock(); parsed.append(txn); lock.unlock()
                 } else {
                     lock.lock(); skipped += 1; lock.unlock()

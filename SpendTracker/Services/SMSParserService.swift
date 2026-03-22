@@ -161,20 +161,31 @@ class SMSParserService {
     func extractTransactionType(body: String) -> TransactionType? {
         let b = body.lowercased()
 
-        let debitWords  = ["debited","debit","withdrawn","withdrawal","spent","purchase",
-                           "paid","payment of","transferred from","sent to","mandate executed",
-                           "charged","deducted","auto debit","emi paid","cash withdrawal",
-                           "atm wtdl","pos purchase","online purchase","dr "]
-        let creditWords = ["credited","credit","received","deposited","refund","cashback",
-                           "salary credited","added to","transferred to your",
-                           "imps cr","neft cr","upi cr","reversed","reversal","cr "]
+        // Check CREDIT first — credit keywords are more specific
+        // Avoids "paid" or "payment" wrongly matching debit
+        let creditWords = [
+            "credited", "credit", "received in your", "deposited to",
+            "refund", "cashback received", "salary credited", "salary has been",
+            "added to your", "transferred to your", "money received",
+            "funds received", "amount credited", "imps cr", "neft cr",
+            "upi cr", "rtgs cr", "reversed to", "reversal credited", "cr to"
+        ]
 
-        if debitWords.contains(where: { b.contains($0) }) { return .debit }
+        let debitWords = [
+            "debited", "debit", "withdrawn", "withdrawal", "spent",
+            "purchase", "paid", "payment of", "transferred from",
+            "sent to", "mandate executed", "charged", "deducted",
+            "auto debit", "emi paid", "cash withdrawal",
+            "atm wtdl", "pos purchase", "online purchase", "dr to"
+        ]
+
+        // Credit check first
         if creditWords.contains(where: { b.contains($0) }) { return .credit }
+        if debitWords.contains(where:  { b.contains($0) }) { return .debit  }
 
-        // Sign-based fallback: DR / CR suffix in many bank formats
-        if b.range(of: #"\bdr\b"#, options: .regularExpression) != nil { return .debit }
+        // CR / DR suffix fallback
         if b.range(of: #"\bcr\b"#, options: .regularExpression) != nil { return .credit }
+        if b.range(of: #"\bdr\b"#, options: .regularExpression) != nil { return .debit  }
 
         return nil
     }
@@ -183,25 +194,44 @@ class SMSParserService {
     // MARK: Amount Extraction
     // ─────────────────────────────────────────────────────────────
     func extractAmount(body: String) -> Double? {
-        // Patterns ordered by specificity
+
+        // Remove balance/limit lines to avoid picking wrong amount
+        let cleanedLines = body.components(separatedBy: "\n").filter { line in
+            let l = line.lowercased()
+            return !l.contains("avl bal") &&
+                   !l.contains("avail bal") &&
+                   !l.contains("available bal") &&
+                   !l.contains("credit limit") &&
+                   !l.contains("total limit") &&
+                   !l.contains("closing bal") &&
+                   !l.contains("outstanding")
+        }
+        let b = cleanedLines.joined(separator: "\n").lowercased()
+
+        // Patterns ordered by specificity — most specific first
         let patterns: [String] = [
-            // Rs.1,234.56 / Rs 1234 / INR 1234.56 / ₹1234
-            #"(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
-            // "amount Rs/INR ..."
+            // "debited/credited Rs.1234" — most specific
+            #"(?:debited|credited|spent|withdrawn)\s+(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
+            // "Rs.1234 debited/credited"
+            #"(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)\s+(?:debited|credited|spent)"#,
+            // "amount Rs/INR 1234"
             #"amount[\s:]+(?:rs\.?|inr|₹)?\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
             // "1234.56 has been debited/credited"
             #"([0-9,]+\.[0-9]{2})\s+(?:has been |is )?(?:debited|credited|spent)"#,
             // "txn of Rs500"
             #"txn\s+of\s+(?:rs\.?|inr|₹)?\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
-            // "for Rs 500" used in many UPI SMSes
+            // "for Rs 500"
             #"for\s+(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
+            // Generic — last resort
+            #"(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
         ]
-        let b = body.lowercased()
+
         for pattern in patterns {
             if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
                let match = regex.firstMatch(in: b, range: NSRange(b.startIndex..., in: b)),
                let range = Range(match.range(at: 1), in: b) {
-                let raw = String(b[range]).replacingOccurrences(of: ",", with: "").trimmingCharacters(in: .whitespaces)
+                let raw = String(b[range]).replacingOccurrences(of: ",", with: "")
+                    .trimmingCharacters(in: .whitespaces)
                 if let v = Double(raw), v > 0 { return v }
             }
         }

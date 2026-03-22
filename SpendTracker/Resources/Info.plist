@@ -86,7 +86,7 @@
         <!-- SMS import via Shortcuts -->
         <dict>
             <key>CFBundleURLName</key>
-            <string>com.yourname.spendtracker</string>
+            <string>com.munibk.spendtracker</string>
             <key>CFBundleURLSchemes</key>
             <array>
                 <string>spendtracker</string>
@@ -95,10 +95,10 @@
         <!-- Gmail OAuth2 callback -->
         <dict>
             <key>CFBundleURLName</key>
-            <string>com.yourname.spendtracker.oauth</string>
+            <string>com.munibk.spendtracker.oauth</string>
             <key>CFBundleURLSchemes</key>
             <array>
-                <string>com.yourname.spendtracker</string>
+                <string>com.munibk.spendtracker</string>
             </array>
         </dict>
     </array>

@@ -17,14 +17,20 @@ class EmailParserService {
         let cleaned = cleanText(emailBody)
         let b       = cleaned.lowercased()
 
+        // Split subject from body — subject is the first line
+        let lines   = cleaned.components(separatedBy: "\n")
+        let subject = lines.first ?? ""
+        let body    = lines.dropFirst().joined(separator: "\n")
+
         // Must look like a transaction email
         let txnWords = ["debited","credited","transaction","inr","rs.","rs ","₹",
                         "used for","amount debited","amount credited","debit alert",
                         "credit alert","payment of","purchase of"]
         guard txnWords.contains(where: { b.contains($0) }) else { return nil }
 
-        guard let amount = extractAmount(body: cleaned)    else { return nil }
-        guard let type   = extractType(body: cleaned)      else { return nil }
+        // Use subject + body for type detection (most accurate)
+        guard let type = extractType(subject: subject, body: body) else { return nil }
+        guard let amount = extractAmount(body: cleaned)             else { return nil }
 
         let merchant     = extractMerchant(body: cleaned, sender: sender)
         let bank         = smsParser.detectBank(sender: sender, body: cleaned)
@@ -34,7 +40,6 @@ class EmailParserService {
         let cardType     = smsParser.detectCardType(body: cleaned)
         let txnDate      = extractDate(body: cleaned) ?? date
 
-        // Categorize using full email text + merchant + upi
         let category = CategoryService.shared.categorize(
             merchant: merchant,
             body:     b,
@@ -61,23 +66,62 @@ class EmailParserService {
     // MARK: Amount
     // ─────────────────────────────────────────────────────────
     private func extractAmount(body: String) -> Double? {
+
+        // ── Pre-process: remove balance/limit lines ────────────
+        let cleanedLines = body.components(separatedBy: "\n").filter { line in
+            let l = line.lowercased()
+            return !l.contains("available credit limit") &&
+                   !l.contains("available balance") &&
+                   !l.contains("avl bal") &&
+                   !l.contains("avail bal") &&
+                   !l.contains("total credit limit") &&
+                   !l.contains("credit limit") &&
+                   !l.contains("balance after") &&
+                   !l.contains("closing balance") &&
+                   !l.contains("opening balance") &&
+                   !l.contains("outstanding") &&
+                   !l.contains("minimum due") &&
+                   !l.contains("total due") &&
+                   !l.contains("minimum amount due")
+        }
+        let cleaned = cleanedLines.joined(separator: "\n")
+
+        // ── Pattern 1: Multi-line format (Axis Bank style) ─────
+        // "Amount Debited:\nINR 120.00"
+        // "Amount Credited:\nINR 1.00"
+        let multiLinePattern = #"[Aa]mount\s*(?:[Dd]ebited|[Cc]redited)\s*[:\-]?\s*\n\s*(?:INR|Rs\.?|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)"#
+        if let re    = try? NSRegularExpression(pattern: multiLinePattern, options: .dotMatchesLineSeparators),
+           let match = re.firstMatch(in: cleaned, range: NSRange(cleaned.startIndex..., in: cleaned)),
+           let range = Range(match.range(at: 1), in: cleaned) {
+            let raw = String(cleaned[range]).replacingOccurrences(of: ",", with: "")
+            if let v = Double(raw), v > 0 { return v }
+        }
+
+        // ── Pattern 2: Same line formats ──────────────────────
         let patterns = [
-            // "INR 120.00" — Axis, ICICI
+            // "Amount Debited: INR 120.00"
+            #"[Aa]mount\s*[Dd]ebited\s*[:\-]\s*(?:INR|Rs\.?)?\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
+            // "Amount Credited: INR 1.00"
+            #"[Aa]mount\s*[Cc]redited\s*[:\-]\s*(?:INR|Rs\.?)?\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
+            // "INR 120.00 was debited/credited"
+            #"INR\s*([0-9,]+(?:\.[0-9]{1,2})?)\s+(?:was|has been|is)"#,
+            // "transaction of INR 500"
+            #"transaction\s+of\s+(?:INR|Rs\.?|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
+            // "INR 120.00" — generic fallback (after balance lines removed)
             #"INR\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
-            // "Rs. 500" or "Rs 500"
+            // "Rs. 500"
             #"[Rr][Ss]\.?\s+([0-9,]+(?:\.[0-9]{1,2})?)"#,
             // "₹500"
             #"₹\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
-            // "Amount Debited: 500" or "Amount: 500"
-            #"[Aa]mount\s*(?:[Dd]ebited|[Cc]redited)?\s*[:\-]\s*(?:INR|Rs\.?)?\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
-            // "transaction of INR 500"
-            #"transaction\s+of\s+(?:INR|Rs\.?|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
+            // "Amount: 500"
+            #"[Aa]mount\s*[:\-]\s*(?:INR|Rs\.?)?\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
         ]
+
         for p in patterns {
             if let re    = try? NSRegularExpression(pattern: p),
-               let match = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
-               let range = Range(match.range(at: 1), in: body) {
-                let raw = String(body[range]).replacingOccurrences(of: ",", with: "")
+               let match = re.firstMatch(in: cleaned, range: NSRange(cleaned.startIndex..., in: cleaned)),
+               let range = Range(match.range(at: 1), in: cleaned) {
+                let raw = String(cleaned[range]).replacingOccurrences(of: ",", with: "")
                 if let v = Double(raw), v > 0 { return v }
             }
         }
@@ -85,29 +129,81 @@ class EmailParserService {
     }
 
     // ─────────────────────────────────────────────────────────
-    // MARK: Type
+    // MARK: Type — Subject first, body confirmation
+    // Strategy:
+    //   1. Check subject line — most reliable signal
+    //   2. Confirm with body — prevents false positives
+    //   3. Fallback to body-only if subject unclear
     // ─────────────────────────────────────────────────────────
-    private func extractType(body: String) -> TransactionType? {
+    func extractType(subject: String, body: String) -> TransactionType? {
+        let s = subject.lowercased()
         let b = body.lowercased()
 
-        let debitPhrases = [
-            "was debited", "has been debited", "debited from",
-            "has been used for", "card.*used for", "purchase of",
-            "payment of", "spent", "withdrawn", "withdrawal",
-            "auto debit", "mandate", "emi deducted", "pos purchase"
+        // ── Step 1: Subject-based detection ───────────────────
+        // Banks always mention debit/credit clearly in subject
+        let subjectCredit = [
+            "credited", "credit alert", "amount credited",
+            "money received", "funds credited", "salary credited",
+            "neft credit", "imps credit", "upi credit",
+            "transfer received", "refund", "cashback",
+            "account credited"
         ]
-        let creditPhrases = [
-            "was credited", "has been credited", "credited to",
-            "received", "refund", "cashback", "reversed",
-            "salary credited", "amount credited"
+        let subjectDebit = [
+            "debited", "debit alert", "amount debited",
+            "transaction alert", "payment", "purchase",
+            "used for", "withdrawn", "withdrawal",
+            "neft debit", "imps debit", "upi debit",
+            "auto debit", "emi", "pos"
         ]
 
-        for p in debitPhrases {
-            if b.range(of: p, options: .regularExpression) != nil { return .debit }
+        var subjectType: TransactionType? = nil
+        for kw in subjectCredit { if s.contains(kw) { subjectType = .credit; break } }
+        if subjectType == nil {
+            for kw in subjectDebit { if s.contains(kw) { subjectType = .debit; break } }
         }
-        for p in creditPhrases {
-            if b.range(of: p, options: .regularExpression) != nil { return .credit }
+
+        // ── Step 2: Body confirmation ──────────────────────────
+        // Check if body agrees with subject signal
+        let bodyCredit = [
+            "amount credited", "was credited", "has been credited",
+            "credited to your", "money received", "funds credited",
+            "neft cr", "imps cr", "upi cr", "salary credited",
+            "deposited", "refund", "cashback", "reversed to",
+            "transfer received", "received in your"
+        ]
+        let bodyDebit = [
+            "amount debited", "was debited", "has been debited",
+            "debited from", "has been used for", "purchase of",
+            "payment of", "withdrawn", "auto debit", "mandate",
+            "neft dr", "imps dr", "upi dr", "pos purchase",
+            "charged to", "emi deducted", "deducted from"
+        ]
+
+        let bodyConfirmsCredit = bodyCredit.contains { b.contains($0) }
+        let bodyConfirmsDebit  = bodyDebit.contains  { b.contains($0) }
+
+        // ── Step 3: Decision logic ─────────────────────────────
+        if let st = subjectType {
+            // Subject found — confirm with body
+            if st == .credit && bodyConfirmsCredit { return .credit }
+            if st == .debit  && bodyConfirmsDebit  { return .debit  }
+
+            // Subject and body disagree — trust body (more detailed)
+            if bodyConfirmsCredit { return .credit }
+            if bodyConfirmsDebit  { return .debit  }
+
+            // Body has no confirmation — trust subject alone
+            return st
         }
+
+        // ── Step 4: No subject signal — use body only ──────────
+        if bodyConfirmsCredit { return .credit }
+        if bodyConfirmsDebit  { return .debit  }
+
+        // ── Step 5: CR/DR suffix fallback ─────────────────────
+        if b.range(of: #"\bcr\b"#, options: .regularExpression) != nil { return .credit }
+        if b.range(of: #"\bdr\b"#, options: .regularExpression) != nil { return .debit  }
+
         return nil
     }
 
@@ -116,17 +212,29 @@ class EmailParserService {
     // ─────────────────────────────────────────────────────────
     func extractMerchant(body: String, sender: String) -> String {
 
-        // ── Pattern 1: Axis Bank UPI format ──────────────────
-        // "Transaction Info: UPI/P2A/517025145854/T DINAKARAN"
+        // ── Pattern 1: Multi-line "Transaction Info:\nUPI/P2A/.../NAME" ─
+        // Axis Bank format: Transaction Info:\nUPI/P2A/607854315875/MAMTHA V/SBIN/UPI
+        let multiLineInfo = #"[Tt]ransaction\s*[Ii]nfo\s*[:\-]?\s*\n\s*UPI/P2[AM]/\d+/([A-Za-z][A-Za-z0-9 ]{1,40})"#
+        if let re = try? NSRegularExpression(pattern: multiLineInfo, options: .dotMatchesLineSeparators),
+           let m  = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
+           let r  = Range(m.range(at: 1), in: body) {
+            // Name can be "MAMTHA V/SBIN/UPI" — take only part before next /
+            let full = String(body[r]).trimmingCharacters(in: .whitespaces)
+            let name = full.components(separatedBy: "/").first ?? full
+            if name.count > 1 { return beautify(name) }
+        }
+
+        // ── Pattern 2: Same-line "Transaction Info: UPI/P2A/.../NAME" ──
+        // Axis Bank same-line format
         if let re = try? NSRegularExpression(pattern: #"UPI/P2[AM]/\d+/([A-Za-z][A-Za-z0-9 ]{1,40})"#),
            let m  = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
            let r  = Range(m.range(at: 1), in: body) {
-            let n = String(body[r]).trimmingCharacters(in: .whitespaces)
-            if n.count > 1 { return beautify(n) }
+            let full = String(body[r]).trimmingCharacters(in: .whitespaces)
+            let name = full.components(separatedBy: "/").first ?? full
+            if name.count > 1 { return beautify(name) }
         }
 
-        // ── Pattern 2: ICICI UPI format ───────────────────────
-        // "Info: UPI-912372950586-Mr MUTHU"
+        // ── Pattern 3: ICICI "Info: UPI-912372950586-Mr MUTHU" ───────
         if let re = try? NSRegularExpression(pattern: #"UPI-\d{6,}-([A-Za-z][A-Za-z0-9 ]{1,40})"#),
            let m  = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
            let r  = Range(m.range(at: 1), in: body) {
@@ -134,7 +242,18 @@ class EmailParserService {
             if n.count > 1 { return beautify(n) }
         }
 
-        // ── Pattern 3: Transaction Info / Info label ──────────
+        // ── Pattern 4: Multi-line "Transaction Info:\nSOME TEXT" ─────
+        let multiLineLabelPattern = #"[Tt]ransaction\s*[Ii]nfo\s*[:\-]?\s*\n\s*([A-Za-z][A-Za-z0-9 &._\-]{2,40})"#
+        if let re = try? NSRegularExpression(pattern: multiLineLabelPattern, options: .dotMatchesLineSeparators),
+           let m  = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
+           let r  = Range(m.range(at: 1), in: body) {
+            let candidate = String(body[r]).trimmingCharacters(in: .whitespaces)
+            if candidate.count > 2, !isGenericWord(candidate) {
+                return beautify(candidate)
+            }
+        }
+
+        // ── Pattern 5: Same-line label patterns ───────────────────────
         let labelPatterns = [
             #"[Tt]ransaction\s*[Ii]nfo\s*[:\-]\s*([A-Za-z][A-Za-z0-9 &._\-]{2,40})"#,
             #"\bInfo\s*[:\-]\s*(?!UPI)([A-Za-z][A-Za-z0-9 &._\-]{2,40})"#,
@@ -156,16 +275,14 @@ class EmailParserService {
             }
         }
 
-        // ── Pattern 4: VPA handle before @ ───────────────────
+        // ── Pattern 6: VPA handle before @ ────────────────────────────
         if let vpa = smsParser.extractUPIId(body: body) {
             let name = vpa.components(separatedBy: "@").first ?? ""
-            // Remove numeric-only UPI refs
             if name.count > 2, !name.allSatisfy({ $0.isNumber }) {
                 return beautify(name)
             }
         }
 
-        // ── Pattern 5: Well-known app names in body ───────────
         return smsParser.extractMerchant(body: body, sender: sender)
     }
 
@@ -174,15 +291,23 @@ class EmailParserService {
     // ─────────────────────────────────────────────────────────
     private func extractAccount(body: String) -> String? {
         let patterns = [
+            // Multi-line: "Account Number:\nXX5171" — Axis Bank
+            #"[Aa]ccount\s*[Nn]umber\s*[:\-]?\s*\n\s*[Xx]{2}(\d{4})\b"#,
+            // Same-line: "A/c no. XX5171"
             #"[Aa]/[Cc]\.?\s*(?:[Nn]o\.?)?\s*[Xx]{1,4}(\d{4})\b"#,
+            // "Credit Card XX9008"
             #"[Cc]redit\s+[Cc]ard\s+[Xx]{2}(\d{4})\b"#,
+            // "Debit Card XX1234"
             #"[Dd]ebit\s+[Cc]ard\s+[Xx]{2}(\d{4})\b"#,
+            // "Card XX1234"
             #"[Cc]ard\s+[Xx]{2}(\d{4})\b"#,
+            // "Account Number: XX5171"
             #"[Aa]ccount\s+[Nn]umber\s*[:\-]\s*[Xx]{2}(\d{4})\b"#,
+            // Generic XX1234
             #"[Xx]{2,}(\d{4})\b"#,
         ]
         for p in patterns {
-            if let re = try? NSRegularExpression(pattern: p, options: .caseInsensitive),
+            if let re = try? NSRegularExpression(pattern: p, options: [.caseInsensitive, .dotMatchesLineSeparators]),
                let m  = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
                let r  = Range(m.range(at: 1), in: body) {
                 return String(body[r])
