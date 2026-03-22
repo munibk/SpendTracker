@@ -13,7 +13,7 @@ class GmailService: ObservableObject {
     // IMPORTANT: Replace with your own Google OAuth Client ID
     // Get it free from: https://console.cloud.google.com
     // Steps in README_GMAIL_SETUP.md
-    private let clientID     = "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
+    private let clientID     = "396449652721-030jr599hc1r67sj22hngg0imt4pha0s.apps.googleusercontent.com"
     private let redirectURI  = "com.yourname.spendtracker:/oauth2callback"
     private let scope        = "https://www.googleapis.com/auth/gmail.readonly"
     private let authEndpoint = "https://accounts.google.com/o/oauth2/v2/auth"
