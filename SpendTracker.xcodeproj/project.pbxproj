@@ -24,6 +24,9 @@
 		AA000015 /* ReportsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000015; };
 		AA000016 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000016; };
 		AA000017 /* Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000017; };
+		AA000018 /* GmailService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000018; };
+		AA000019 /* EmailParserService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000019; };
+		AA000020 /* GmailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000020; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -44,6 +47,9 @@
 		BA000015 /* ReportsView.swift */        = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportsView.swift; sourceTree = "<group>"; };
 		BA000016 /* SettingsView.swift */       = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		BA000017 /* Extensions.swift */         = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Extensions.swift; sourceTree = "<group>"; };
+		BA000018 /* GmailService.swift */        = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GmailService.swift; sourceTree = "<group>"; };
+		BA000019 /* EmailParserService.swift */  = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailParserService.swift; sourceTree = "<group>"; };
+		BA000020 /* GmailView.swift */           = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GmailView.swift; sourceTree = "<group>"; };
 		BA000099 /* SpendTracker.app */         = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpendTracker.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BA000100 /* Info.plist */               = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		BA000101 /* SpendTracker.entitlements */= {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SpendTracker.entitlements; sourceTree = "<group>"; };
@@ -107,9 +113,20 @@
 				BA000008,
 				BA000009,
 				BA000010,
+				BA000018,
+				BA000019,
 			);
 			name = Services;
 			path = Services;
+			sourceTree = "<group>";
+		};
+		EMAILGROUP = {
+			isa = PBXGroup;
+			children = (
+				BA000020,
+			);
+			name = Email;
+			path = Email;
 			sourceTree = "<group>";
 		};
 		VIEWSGROUP = {
@@ -121,6 +138,7 @@
 				CHARTSGROUP,
 				REPORTSGROUP,
 				SETTINGSGROUP,
+				EMAILGROUP,
 			);
 			name = Views;
 			path = Views;
@@ -257,6 +275,9 @@
 				AA000015,
 				AA000016,
 				AA000017,
+				AA000018,
+				AA000019,
+				AA000020,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -6,6 +6,7 @@ struct SpendTrackerApp: App {
 
     @StateObject private var store      = TransactionStore()
     @StateObject private var smsService = SMSReaderService()
+    @StateObject private var gmail      = GmailService.shared
 
     init() {
         registerBackgroundTasks()
@@ -27,35 +28,46 @@ struct SpendTrackerApp: App {
         }
     }
 
-    // MARK: - URL Scheme Handler
-    // Handles: spendtracker://import?sms=<encoded>
+    // ─────────────────────────────────────────────────────────
+    // MARK: URL Handler
+    // Handles:
+    //   spendtracker://import?sms=<encoded>   ← Shortcuts SMS
+    //   com.munibk.spendtracker:/oauth2callback?code=<code> ← Gmail OAuth
+    // ─────────────────────────────────────────────────────────
     private func handleIncomingURL(_ url: URL) {
-        guard url.scheme?.lowercased() == "spendtracker" else { return }
+        let scheme = url.scheme?.lowercased() ?? ""
 
-        // Parse query parameters
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let queryItems  = components.queryItems else { return }
+        // Gmail OAuth callback
+        if scheme == "com.yourname.spendtracker" {
+            gmail.handleCallback(url: url)
+            return
+        }
 
-        let params = Dictionary(
-            uniqueKeysWithValues: queryItems.compactMap { item -> (String, String)? in
-                guard let value = item.value else { return nil }
-                return (item.name, value)
+        // SMS import via Shortcuts
+        if scheme == "spendtracker" {
+            guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                  let queryItems  = components.queryItems else { return }
+
+            let params = Dictionary(uniqueKeysWithValues:
+                queryItems.compactMap { item -> (String, String)? in
+                    guard let v = item.value else { return nil }
+                    return (item.name, v)
+                })
+
+            guard let smsBody = params["sms"]?.removingPercentEncoding,
+                  !smsBody.isEmpty else { return }
+
+            let sender = params["sender"]?.removingPercentEncoding ?? "BANK"
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                _ = self.smsService.importManualSMS(smsBody, sender: sender)
             }
-        )
-
-        // Get SMS body
-        guard let smsBody = params["sms"]?.removingPercentEncoding,
-              !smsBody.isEmpty else { return }
-
-        let sender = params["sender"]?.removingPercentEncoding ?? "BANK"
-
-        // Import the SMS
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            _ = self.smsService.importManualSMS(smsBody, sender: sender)
         }
     }
 
-    // MARK: - Background Tasks
+    // ─────────────────────────────────────────────────────────
+    // MARK: Background Tasks
+    // ─────────────────────────────────────────────────────────
     private func registerBackgroundTasks() {
         BGTaskScheduler.shared.register(
             forTaskWithIdentifier: "com.spendtracker.sms.refresh",
@@ -69,8 +81,11 @@ struct SpendTrackerApp: App {
     private func handleBackgroundRefresh(task: BGAppRefreshTask) {
         scheduleBackgroundRefresh()
         task.expirationHandler = { task.setTaskCompleted(success: false) }
-        smsService.fetchNewMessages()
-        task.setTaskCompleted(success: true)
+
+        // Auto fetch Gmail in background
+        gmail.fetchBankEmails(store: store) { _ in
+            task.setTaskCompleted(success: true)
+        }
     }
 
     private func scheduleBackgroundRefresh() {

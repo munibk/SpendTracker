@@ -80,15 +80,25 @@
         <string>UIInterfaceOrientationPortraitUpsideDown</string>
     </array>
 
-    <!-- ── URL Scheme (for Shortcuts automation) ────────────── -->
+    <!-- ── URL Schemes ───────────────────────────────────────── -->
     <key>CFBundleURLTypes</key>
     <array>
+        <!-- SMS import via Shortcuts -->
         <dict>
             <key>CFBundleURLName</key>
-            <string>com.munibk.spendtracker</string>
+            <string>com.yourname.spendtracker</string>
             <key>CFBundleURLSchemes</key>
             <array>
                 <string>spendtracker</string>
+            </array>
+        </dict>
+        <!-- Gmail OAuth2 callback -->
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.yourname.spendtracker.oauth</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>com.yourname.spendtracker</string>
             </array>
         </dict>
     </array>
