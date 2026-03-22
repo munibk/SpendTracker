@@ -46,6 +46,22 @@ struct GmailView: View {
                         }
                         .disabled(gmail.isFetching)
 
+                        // Re-scan button — clears cache and fetches all
+                        Button(action: rescanAllEmails) {
+                            HStack {
+                                Image(systemName: "arrow.clockwise.circle")
+                                    .foregroundColor(.orange)
+                                    .frame(width: 20)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Re-scan All Emails")
+                                    Text("Use this if transactions are missing")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                        .disabled(gmail.isFetching)
+
                         Button(action: { showManualImport = true }) {
                             Label("Paste Email Manually",
                                   systemImage: "doc.text")
@@ -215,6 +231,13 @@ struct GmailView: View {
     }
 
     // ── Fetch Emails ──────────────────────────────────────────
+    private func rescanAllEmails() {
+        gmail.resetProcessedEmails()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            fetchEmails()
+        }
+    }
+
     private func fetchEmails() {
         gmail.fetchBankEmails(store: store) { count in
             fetchCount      = count

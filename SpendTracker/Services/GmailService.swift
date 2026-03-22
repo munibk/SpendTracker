@@ -13,7 +13,7 @@ class GmailService: ObservableObject {
     // IMPORTANT: Replace with your own Google OAuth Client ID
     // Get it free from: https://console.cloud.google.com
     // Steps in README_GMAIL_SETUP.md
-    private let clientID     = "396449652721-030jr599hc1r67sj22hngg0imt4pha0s.apps.googleusercontent.com"
+    private let clientID     = "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
     private let redirectURI  = "com.yourname.spendtracker:/oauth2callback"
     private let scope        = "https://www.googleapis.com/auth/gmail.readonly"
     private let authEndpoint = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -192,29 +192,42 @@ class GmailService: ObservableObject {
     // ─────────────────────────────────────────────────────────
 
     // Bank email sender addresses / subject keywords
+    // Updated based on real Indian bank email formats
     private let bankQueries: [String] = [
-        // HDFC
-        "from:alerts@hdfcbank.net",
-        "from:noreply@hdfcbank.com",
-        // ICICI
-        "from:credit_cards@icicibank.com",
-        "from:autoemail@icicibank.com",
-        // SBI
-        "from:sbiatm@sbi.co.in",
-        "from:noreply@sbi.co.in",
-        // Axis
-        "from:alerts@axisbank.com",
-        "from:noreply@axisbank.com",
-        // Kotak
-        "from:noreply@kotak.com",
-        "from:alerts@kotak.com",
-        // Generic bank keywords
-        "subject:transaction alert",
+        // ── Axis Bank ────────────────────────────────────────
+        "from:axisbank",
+        "from:axis",
+        // ── ICICI Bank ───────────────────────────────────────
+        "from:icicibank",
+        "from:icici",
+        // ── HDFC Bank ────────────────────────────────────────
+        "from:hdfcbank",
+        "from:hdfc",
+        // ── SBI ──────────────────────────────────────────────
+        "from:sbi",
+        // ── Kotak ────────────────────────────────────────────
+        "from:kotak",
+        // ── Other Banks ──────────────────────────────────────
+        "from:yesbank",
+        "from:indusind",
+        "from:idfcfirst",
+        "from:federalbank",
+        "from:rblbank",
+        "from:aubank",
+        "from:pnb",
+        "from:bankofbaroda",
+        "from:canarabank",
+        "from:unionbank",
+        // ── Subject keyword fallbacks ─────────────────────────
         "subject:debited",
         "subject:credited",
+        "subject:transaction alert",
         "subject:payment confirmation",
         "subject:UPI transaction",
-        "subject:account statement",
+        "subject:INR debited",
+        "subject:INR credited",
+        "subject:account alert",
+        "subject:card alert",
     ]
 
     func fetchBankEmails(store: TransactionStore, completion: @escaping (Int) -> Void) {
@@ -237,37 +250,61 @@ class GmailService: ObservableObject {
                 completion(0); return
             }
 
-            // Build combined query
-            let query    = self.bankQueries.joined(separator: " OR ")
-            let encoded  = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-            let lastID   = UserDefaults.standard.string(forKey: "gmail_last_history_id") ?? ""
-            let afterFilter = lastID.isEmpty ? "" : "&q=after:\(lastID)"
-            let urlStr   = "\(self.gmailAPI)/users/me/messages?q=\(encoded)\(afterFilter)&maxResults=50"
+            // Simple broad query that catches all bank transaction emails
+            // Gmail API works best with shorter queries
+            let query = "subject:debited OR subject:credited OR subject:transaction OR from:axisbank OR from:icicibank OR from:hdfcbank OR from:sbi.co.in OR from:kotak"
 
-            guard let url = URL(string: urlStr) else { completion(0); return }
+            let encoded = query.addingPercentEncoding(
+                withAllowedCharacters: .urlQueryAllowed
+            ) ?? ""
+
+            // Only fetch last 30 days emails
+            let thirtyDaysAgo = Int(Date().addingTimeInterval(-30 * 24 * 60 * 60).timeIntervalSince1970)
+            let urlStr = "\(self.gmailAPI)/users/me/messages?q=\(encoded)%20after:\(thirtyDaysAgo)&maxResults=50"
+
+            guard let url = URL(string: urlStr) else {
+                DispatchQueue.main.async {
+                    self.isFetching  = false
+                    self.fetchStatus = "Invalid URL"
+                }
+                completion(0); return
+            }
 
             var req = URLRequest(url: url)
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
-            URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
-                guard let self,
-                      let data,
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let messages = json["messages"] as? [[String: Any]]
-                else {
-                    DispatchQueue.main.async {
-                        self?.isFetching  = false
-                        self?.fetchStatus = "No new bank emails found"
-                    }
-                    completion(0); return
-                }
+            URLSession.shared.dataTask(with: req) { [weak self] data, response, error in
+                guard let self else { return }
 
-                self.processMessages(
-                    messages: messages,
-                    token:    token,
-                    store:    store,
-                    completion: completion
-                )
+                // Debug: print response
+                if let data = data,
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+
+                    if let messages = json["messages"] as? [[String: Any]] {
+                        DispatchQueue.main.async {
+                            self.fetchStatus = "Found \(messages.count) emails, parsing..."
+                        }
+                        self.processMessages(
+                            messages: messages,
+                            token:    token,
+                            store:    store,
+                            completion: completion
+                        )
+                    } else {
+                        // No messages found
+                        DispatchQueue.main.async {
+                            self.isFetching  = false
+                            self.fetchStatus = "No bank emails found in last 30 days"
+                        }
+                        completion(0)
+                    }
+                } else {
+                    DispatchQueue.main.async {
+                        self.isFetching  = false
+                        self.fetchStatus = "Error connecting to Gmail"
+                    }
+                    completion(0)
+                }
             }.resume()
         }
     }
@@ -275,6 +312,19 @@ class GmailService: ObservableObject {
     // ─────────────────────────────────────────────────────────
     // MARK: Process Each Email
     // ─────────────────────────────────────────────────────────
+    // Call this to re-scan all emails (useful when parser is updated)
+    func resetProcessedEmails() {
+        // Clear all processed email flags
+        let defaults = UserDefaults.standard
+        let dict = defaults.dictionaryRepresentation()
+        for key in dict.keys where key.hasPrefix("gmail_processed_") {
+            defaults.removeObject(forKey: key)
+        }
+        DispatchQueue.main.async {
+            self.fetchStatus = "Cache cleared — tap Fetch to reimport"
+        }
+    }
+
     private func processMessages(
         messages:   [[String: Any]],
         token:      String,

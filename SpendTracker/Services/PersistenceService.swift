@@ -19,19 +19,69 @@ class TransactionStore: ObservableObject {
 
     // MARK: - CRUD
     func addTransaction(_ txn: Transaction) {
-        guard !transactions.contains(where: { $0.id == txn.id }) else { return }
+        guard !isDuplicate(txn) else {
+            print("Duplicate skipped: \(txn.merchant) ₹\(txn.amount)")
+            return
+        }
         transactions.insert(txn, at: 0)
         save()
         regenerateReport(for: txn.date)
     }
 
     func addTransactions(_ txns: [Transaction]) {
-        let fresh = txns.filter { t in !transactions.contains(where: { $0.id == t.id }) }
+        let fresh = txns.filter { !isDuplicate($0) }
         guard !fresh.isEmpty else { return }
         transactions.insert(contentsOf: fresh, at: 0)
         transactions.sort { $0.date > $1.date }
         save()
         if let d = fresh.first?.date { regenerateReport(for: d) }
+    }
+
+    // MARK: - Duplicate Detection
+    // Checks amount + type + date (within 5 min window) + account
+    // This catches same transaction imported from both SMS and Gmail
+    private func isDuplicate(_ txn: Transaction) -> Bool {
+
+        // Window of 5 minutes — same txn can't happen twice in 5 min
+        let window: TimeInterval = 5 * 60
+
+        return transactions.contains { existing in
+
+            // Must match amount exactly
+            guard existing.amount == txn.amount else { return false }
+
+            // Must match type (debit/credit)
+            guard existing.type == txn.type else { return false }
+
+            // Must be within 5 minute window
+            let timeDiff = abs(existing.date.timeIntervalSince(txn.date))
+            guard timeDiff <= window else { return false }
+
+            // If both have account last 4 — must match
+            if let existingAcct = existing.accountLast4,
+               let newAcct      = txn.accountLast4,
+               !existingAcct.isEmpty, !newAcct.isEmpty {
+                return existingAcct == newAcct
+            }
+
+            // If both have UPI ID — must match
+            if let existingUPI = existing.upiId,
+               let newUPI      = txn.upiId,
+               !existingUPI.isEmpty, !newUPI.isEmpty {
+                return existingUPI == newUPI
+            }
+
+            // If both have merchant — check similarity
+            if existing.merchant != "Unknown" && txn.merchant != "Unknown" {
+                let e = existing.merchant.lowercased().trimmingCharacters(in: .whitespaces)
+                let n = txn.merchant.lowercased().trimmingCharacters(in: .whitespaces)
+                // Either exact match or one contains the other
+                return e == n || e.contains(n) || n.contains(e)
+            }
+
+            // Same amount + type + time window = likely duplicate
+            return true
+        }
     }
 
     func updateTransaction(_ txn: Transaction) {

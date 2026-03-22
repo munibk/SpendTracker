@@ -36,7 +36,7 @@ It only requests READ-ONLY access — it never sends, modifies, or deletes email
    - Application type: **iOS**
    - Bundle ID: `com.yourname.spendtracker`
    - Click **Create**
-5. Copy the **Client ID** (looks like: `396449652721-030jr599hc1r67sj22hngg0imt4pha0s.apps.googleusercontent.com`)
+5. Copy the **Client ID** (looks like: `123456789-abc123.apps.googleusercontent.com`)
 
 ---
 

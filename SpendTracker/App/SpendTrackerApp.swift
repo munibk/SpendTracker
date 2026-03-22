@@ -32,7 +32,7 @@ struct SpendTrackerApp: App {
     // MARK: URL Handler
     // Handles:
     //   spendtracker://import?sms=<encoded>   ← Shortcuts SMS
-    //   com.munibk.spendtracker:/oauth2callback?code=<code> ← Gmail OAuth
+    //   com.yourname.spendtracker:/oauth2callback?code=<code> ← Gmail OAuth
     // ─────────────────────────────────────────────────────────
     private func handleIncomingURL(_ url: URL) {
         let scheme = url.scheme?.lowercased() ?? ""
