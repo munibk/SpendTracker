@@ -37,6 +37,10 @@ struct DashboardView: View {
             }
             .navigationTitle("SpendTracker")
             .navigationBarTitleDisplayMode(.large)
+            .refreshable {
+                // Pull to refresh support
+                smsService.fetchNewMessages()
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
@@ -302,9 +306,29 @@ struct TransactionRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(transaction.merchant.isEmpty ? "Unknown" : transaction.merchant)
                     .font(.subheadline).fontWeight(.medium).lineLimit(1)
-                HStack {
+                HStack(spacing: 4) {
                     Text(transaction.category.rawValue)
                         .font(.caption2).foregroundColor(.secondary)
+
+                    // Card type badge
+                    if transaction.cardType != .none {
+                        Text(transaction.cardType == .credit ? "CC" : "DC")
+                            .font(.system(size: 8, weight: .bold))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(
+                                transaction.cardType == .credit
+                                ? Color(hex: "#E74C3C").opacity(0.15)
+                                : Color(hex: "#E67E22").opacity(0.15)
+                            )
+                            .foregroundColor(
+                                transaction.cardType == .credit
+                                ? Color(hex: "#E74C3C")
+                                : Color(hex: "#E67E22")
+                            )
+                            .cornerRadius(3)
+                    }
+
                     if let acct = transaction.accountLast4 {
                         Text("••\(acct)").font(.caption2).foregroundColor(.secondary)
                     }

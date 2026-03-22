@@ -22,6 +22,7 @@ class SMSParserService {
         let balance      = extractBalance(body: smsBody)
         let date         = extractDate(body: smsBody) ?? Date()
         let upiId        = extractUPIId(body: smsBody)
+        let cardType     = detectCardType(body: smsBody)
         let category     = CategoryService.shared.categorize(
                                merchant: merchant,
                                body: smsBody.lowercased(),
@@ -38,8 +39,25 @@ class SMSParserService {
             smsBody:      smsBody,
             accountLast4: accountLast4,
             balance:      balance,
-            upiId:        upiId
+            upiId:        upiId,
+            cardType:     cardType
         )
+    }
+
+    // MARK: - Card Type Detection
+    func detectCardType(body: String) -> CardType {
+        let b = body.lowercased()
+        if b.contains("credit card") || b.contains("cc ") ||
+           b.contains("credit card no") || b.contains("cc no") ||
+           b.contains("credit card xx") || b.contains("credit card ending") {
+            return .credit
+        }
+        if b.contains("debit card") || b.contains("dc ") ||
+           b.contains("debit card no") || b.contains("pos purchase") ||
+           b.contains("pos debit") {
+            return .debit
+        }
+        return .none
     }
 
     // ─────────────────────────────────────────────────────────────

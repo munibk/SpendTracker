@@ -139,6 +139,19 @@ struct EditTransactionView: View {
                     if let last4 = transaction.accountLast4 {
                         Text("Account: ••••\(last4)").foregroundColor(.secondary)
                     }
+                    if transaction.cardType != .none {
+                        HStack {
+                            Text("Card Type:")
+                            Spacer()
+                            Text(transaction.cardType.rawValue)
+                                .foregroundColor(
+                                    transaction.cardType == .credit
+                                    ? Color(hex: "#E74C3C")
+                                    : Color(hex: "#E67E22")
+                                )
+                                .fontWeight(.semibold)
+                        }
+                    }
                     if let upi = transaction.upiId {
                         Text("UPI: \(upi)").foregroundColor(.secondary).font(.caption)
                     }

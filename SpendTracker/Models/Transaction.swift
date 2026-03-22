@@ -28,6 +28,8 @@ enum SpendCategory: String, Codable, CaseIterable, Identifiable {
     case fuel          = "Fuel"
     case bills         = "Bills & Utilities"
     case atm           = "ATM Withdrawal"
+    case creditCard    = "Credit Card"
+    case debitCard     = "Debit Card"
     case travel        = "Travel"
     case entertainment = "Entertainment"
     case health        = "Health & Medical"
@@ -49,13 +51,15 @@ enum SpendCategory: String, Codable, CaseIterable, Identifiable {
         case .fuel:          return "fuelpump.fill"
         case .bills:         return "bolt.fill"
         case .atm:           return "banknote.fill"
+        case .creditCard:    return "creditcard.fill"
+        case .debitCard:     return "creditcard"
         case .travel:        return "airplane"
         case .entertainment: return "tv.fill"
         case .health:        return "cross.fill"
         case .education:     return "book.fill"
         case .groceries:     return "cart.fill"
         case .recharge:      return "phone.fill"
-        case .emi:           return "creditcard.fill"
+        case .emi:           return "dollarsign.circle.fill"
         case .investment:    return "chart.line.uptrend.xyaxis"
         case .salary:        return "indianrupeesign.circle.fill"
         case .others:        return "ellipsis.circle.fill"
@@ -70,6 +74,8 @@ enum SpendCategory: String, Codable, CaseIterable, Identifiable {
         case .fuel:          return Color(hex: "#FFA07A")
         case .bills:         return Color(hex: "#98D8C8")
         case .atm:           return Color(hex: "#7B68EE")
+        case .creditCard:    return Color(hex: "#E74C3C")
+        case .debitCard:     return Color(hex: "#E67E22")
         case .travel:        return Color(hex: "#20B2AA")
         case .entertainment: return Color(hex: "#FFD700")
         case .health:        return Color(hex: "#FF69B4")
@@ -125,8 +131,14 @@ enum SpendCategory: String, Codable, CaseIterable, Identifiable {
         case .recharge:
             return ["recharge","prepaid","talktime","data pack","top up","mobile recharge",
                     "dth recharge","fastag recharge"]
-        case .emi:
-            return ["emi","loan emi","installment","home loan","car loan","personal loan",
+        case .creditCard:
+            return ["credit card", "credit card xx", "cc ending", "credit card no",
+                    "credit card payment", "cc payment", "card xx", "cc bill",
+                    "credit card bill", "cc outstanding", "minimum due"]
+        case .debitCard:
+            return ["debit card", "debit card xx", "dc ending", "debit card no",
+                    "pos debit", "debit card payment", "card swipe",
+                    "point of sale", "pos purchase"]
                     "bajaj finance","hdfc loan","emi paid","equated monthly"]
         case .investment:
             return ["mutual fund","sip","zerodha","groww","upstox","stocks","nse","bse",
@@ -138,6 +150,13 @@ enum SpendCategory: String, Codable, CaseIterable, Identifiable {
             return []
         }
     }
+}
+
+// MARK: - Card Type
+enum CardType: String, Codable {
+    case credit = "Credit Card"
+    case debit  = "Debit Card"
+    case none   = "None"
 }
 
 // MARK: - Transaction Model
@@ -155,6 +174,7 @@ struct Transaction: Identifiable, Codable, Equatable {
     var upiId:        String?
     var isManual:     Bool
     var note:         String?
+    var cardType:     CardType      // Credit Card / Debit Card / None
 
     init(
         id:           UUID          = UUID(),
@@ -169,7 +189,8 @@ struct Transaction: Identifiable, Codable, Equatable {
         balance:      Double?        = nil,
         upiId:        String?        = nil,
         isManual:     Bool           = false,
-        note:         String?        = nil
+        note:         String?        = nil,
+        cardType:     CardType       = .none
     ) {
         self.id           = id
         self.date         = date
@@ -184,6 +205,7 @@ struct Transaction: Identifiable, Codable, Equatable {
         self.upiId        = upiId
         self.isManual     = isManual
         self.note         = note
+        self.cardType     = cardType
     }
 
     var formattedAmount: String {

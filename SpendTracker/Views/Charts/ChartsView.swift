@@ -9,6 +9,7 @@ struct ChartsView: View {
 
     enum ChartType: String, CaseIterable {
         case category   = "Category"
+        case cards      = "Cards"
         case daily      = "Daily"
         case trend      = "Trend"
         case comparison = "Income vs Spend"
@@ -22,6 +23,7 @@ struct ChartsView: View {
                     chartTypeSelector
                     switch selectedChart {
                     case .category:   CategoryChartSection(month: selectedMonth)
+                    case .cards:      CardAnalyticsSection(month: selectedMonth)
                     case .daily:      DailySpendChartSection(month: selectedMonth)
                     case .trend:      TrendChartSection()
                     case .comparison: ComparisonChartSection(month: selectedMonth)
@@ -78,7 +80,365 @@ struct ChartsView: View {
     }
 }
 
-// MARK: - Category Chart
+// MARK: - Card Analytics Section
+struct CardAnalyticsSection: View {
+    @EnvironmentObject var store: TransactionStore
+    let month: Date
+
+    // Credit card transactions
+    private var creditCardTxns: [Transaction] {
+        store.transactions(for: month).filter {
+            $0.type == .debit && $0.cardType == .credit
+        }
+    }
+    // Debit card transactions
+    private var debitCardTxns: [Transaction] {
+        store.transactions(for: month).filter {
+            $0.type == .debit && $0.cardType == .debit
+        }
+    }
+    // UPI transactions
+    private var upiTxns: [Transaction] {
+        store.transactions(for: month).filter {
+            $0.type == .debit && $0.cardType == .none && $0.category == .upi
+        }
+    }
+    // Other transactions
+    private var otherTxns: [Transaction] {
+        store.transactions(for: month).filter {
+            $0.type == .debit && $0.cardType == .none && $0.category != .upi
+        }
+    }
+
+    private var ccTotal:    Double { creditCardTxns.reduce(0) { $0 + $1.amount } }
+    private var dcTotal:    Double { debitCardTxns.reduce(0) { $0 + $1.amount } }
+    private var upiTotal:   Double { upiTxns.reduce(0) { $0 + $1.amount } }
+    private var otherTotal: Double { otherTxns.reduce(0) { $0 + $1.amount } }
+    private var grandTotal: Double { ccTotal + dcTotal + upiTotal + otherTotal }
+
+    var body: some View {
+        VStack(spacing: 16) {
+
+            // ── Summary Cards ──────────────────────────────────
+            HStack(spacing: 12) {
+                CardSpendBox(
+                    title:  "Credit Card",
+                    amount: ccTotal,
+                    count:  creditCardTxns.count,
+                    color:  Color(hex: "#E74C3C"),
+                    icon:   "creditcard.fill"
+                )
+                CardSpendBox(
+                    title:  "Debit Card",
+                    amount: dcTotal,
+                    count:  debitCardTxns.count,
+                    color:  Color(hex: "#E67E22"),
+                    icon:   "creditcard"
+                )
+            }
+            HStack(spacing: 12) {
+                CardSpendBox(
+                    title:  "UPI",
+                    amount: upiTotal,
+                    count:  upiTxns.count,
+                    color:  Color(hex: "#45B7D1"),
+                    icon:   "qrcode"
+                )
+                CardSpendBox(
+                    title:  "Others",
+                    amount: otherTotal,
+                    count:  otherTxns.count,
+                    color:  Color(hex: "#A9A9A9"),
+                    icon:   "ellipsis.circle"
+                )
+            }
+
+            // ── Payment Method Bar Chart ───────────────────────
+            if grandTotal > 0 {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Payment Method Split")
+                        .font(.headline)
+
+                    // Visual bar
+                    GeometryReader { geo in
+                        HStack(spacing: 2) {
+                            if ccTotal > 0 {
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Color(hex: "#E74C3C"))
+                                    .frame(width: geo.size.width * CGFloat(ccTotal / grandTotal))
+                            }
+                            if dcTotal > 0 {
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Color(hex: "#E67E22"))
+                                    .frame(width: geo.size.width * CGFloat(dcTotal / grandTotal))
+                            }
+                            if upiTotal > 0 {
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Color(hex: "#45B7D1"))
+                                    .frame(width: geo.size.width * CGFloat(upiTotal / grandTotal))
+                            }
+                            if otherTotal > 0 {
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Color(hex: "#A9A9A9"))
+                                    .frame(width: max(geo.size.width * CGFloat(otherTotal / grandTotal), 2))
+                            }
+                        }
+                    }
+                    .frame(height: 20)
+
+                    // Legend
+                    VStack(spacing: 6) {
+                        ForEach([
+                            ("Credit Card", ccTotal,    Color(hex: "#E74C3C")),
+                            ("Debit Card",  dcTotal,    Color(hex: "#E67E22")),
+                            ("UPI",         upiTotal,   Color(hex: "#45B7D1")),
+                            ("Others",      otherTotal, Color(hex: "#A9A9A9")),
+                        ], id: \.0) { item in
+                            if item.1 > 0 {
+                                HStack {
+                                    Circle().fill(item.2).frame(width: 10, height: 10)
+                                    Text(item.0).font(.subheadline)
+                                    Spacer()
+                                    Text("₹\(Int(item.1))")
+                                        .font(.subheadline).fontWeight(.semibold)
+                                    Text("\(Int(item.1 / grandTotal * 100))%")
+                                        .font(.caption).foregroundColor(.secondary)
+                                        .frame(width: 35, alignment: .trailing)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding()
+                .background(Color(.systemBackground))
+                .cornerRadius(16)
+                .shadow(color: .black.opacity(0.05), radius: 6)
+            }
+
+            // ── Credit Card Transactions ───────────────────────
+            if !creditCardTxns.isEmpty {
+                CardTransactionList(
+                    title:        "Credit Card Transactions",
+                    transactions: creditCardTxns,
+                    color:        Color(hex: "#E74C3C"),
+                    icon:         "creditcard.fill"
+                )
+            }
+
+            // ── Debit Card Transactions ────────────────────────
+            if !debitCardTxns.isEmpty {
+                CardTransactionList(
+                    title:        "Debit Card Transactions",
+                    transactions: debitCardTxns,
+                    color:        Color(hex: "#E67E22"),
+                    icon:         "creditcard"
+                )
+            }
+
+            // ── Category breakdown for Credit Card ────────────
+            if !creditCardTxns.isEmpty {
+                CardCategoryBreakdown(
+                    title:        "Credit Card Spend by Category",
+                    transactions: creditCardTxns,
+                    color:        Color(hex: "#E74C3C")
+                )
+            }
+
+            // ── Category breakdown for Debit Card ─────────────
+            if !debitCardTxns.isEmpty {
+                CardCategoryBreakdown(
+                    title:        "Debit Card Spend by Category",
+                    transactions: debitCardTxns,
+                    color:        Color(hex: "#E67E22")
+                )
+            }
+
+            if grandTotal == 0 {
+                VStack(spacing: 12) {
+                    Image(systemName: "creditcard.fill")
+                        .font(.system(size: 50))
+                        .foregroundColor(.secondary)
+                    Text("No card transactions this month")
+                        .foregroundColor(.secondary)
+                    Text("Import emails or add transactions manually")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 200)
+                .padding()
+                .background(Color(.systemBackground))
+                .cornerRadius(16)
+            }
+        }
+    }
+}
+
+// MARK: - Card Spend Box
+struct CardSpendBox: View {
+    let title:  String
+    let amount: Double
+    let count:  Int
+    let color:  Color
+    let icon:   String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: icon)
+                    .foregroundColor(color)
+                    .font(.title3)
+                Spacer()
+                Text("\(count) txns")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            Text("₹\(Int(amount))")
+                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .foregroundColor(amount > 0 ? .primary : .secondary)
+            Text(title)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color(.systemBackground))
+                .shadow(color: .black.opacity(0.06), radius: 6)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(amount > 0 ? color.opacity(0.3) : Color.clear, lineWidth: 1.5)
+        )
+    }
+}
+
+// MARK: - Card Transaction List
+struct CardTransactionList: View {
+    let title:        String
+    let transactions: [Transaction]
+    let color:        Color
+    let icon:         String
+
+    @State private var isExpanded = true
+
+    var total: Double { transactions.reduce(0) { $0 + $1.amount } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            Button(action: { withAnimation { isExpanded.toggle() } }) {
+                HStack {
+                    Image(systemName: icon).foregroundColor(color)
+                    Text(title).font(.headline)
+                    Spacer()
+                    Text("₹\(Int(total))")
+                        .font(.subheadline).fontWeight(.semibold)
+                        .foregroundColor(color)
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+                .padding()
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                Divider()
+
+                ForEach(transactions.sorted { $0.date > $1.date }) { txn in
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(txn.merchant.isEmpty ? "Unknown" : txn.merchant)
+                                .font(.subheadline).lineLimit(1)
+                            HStack(spacing: 4) {
+                                Text(txn.category.rawValue)
+                                    .font(.caption2).foregroundColor(.secondary)
+                                if let acct = txn.accountLast4 {
+                                    Text("••\(acct)")
+                                        .font(.caption2).foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text("-₹\(Int(txn.amount))")
+                                .font(.subheadline).fontWeight(.semibold)
+                                .foregroundColor(.red)
+                            Text(txn.shortDate)
+                                .font(.caption2).foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+
+                    Divider().padding(.leading)
+                }
+            }
+        }
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+        .shadow(color: .black.opacity(0.05), radius: 6)
+    }
+}
+
+// MARK: - Card Category Breakdown
+struct CardCategoryBreakdown: View {
+    let title:        String
+    let transactions: [Transaction]
+    let color:        Color
+
+    private var byCategory: [(cat: SpendCategory, amount: Double)] {
+        var map: [SpendCategory: Double] = [:]
+        for t in transactions { map[t.category, default: 0] += t.amount }
+        return map.sorted { $0.value > $1.value }
+                  .map { (cat: $0.key, amount: $0.value) }
+    }
+
+    private var total: Double { transactions.reduce(0) { $0 + $1.amount } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(.headline).padding(.horizontal)
+
+            ForEach(byCategory, id: \.cat) { item in
+                HStack(spacing: 10) {
+                    Image(systemName: item.cat.icon)
+                        .foregroundColor(item.cat.color)
+                        .frame(width: 24)
+                    Text(item.cat.rawValue).font(.subheadline)
+                    Spacer()
+                    Text("₹\(Int(item.amount))")
+                        .font(.subheadline).fontWeight(.medium)
+                    Text("\(Int(item.amount / max(total, 1) * 100))%")
+                        .font(.caption).foregroundColor(.secondary)
+                        .frame(width: 35, alignment: .trailing)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 6)
+
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(Color.gray.opacity(0.15))
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(color)
+                            .frame(width: geo.size.width * CGFloat(item.amount / max(total, 1)))
+                    }
+                }
+                .frame(height: 4)
+                .padding(.horizontal)
+
+                if item.cat != byCategory.last?.cat { Divider().padding(.leading, 44) }
+            }
+        }
+        .padding(.vertical, 12)
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+        .shadow(color: .black.opacity(0.05), radius: 6)
+    }
+}
+
+// MARK: - Category Chart (existing)
 struct CategoryChartSection: View {
     @EnvironmentObject var store: TransactionStore
     let month: Date
@@ -97,7 +457,6 @@ struct CategoryChartSection: View {
             if data.isEmpty {
                 emptyState
             } else {
-                // Donut — iOS 17+ only, bar fallback for iOS 16
                 if #available(iOS 17.0, *) {
                     Chart(data, id: \.category) { item in
                         SectorMark(
@@ -121,7 +480,6 @@ struct CategoryChartSection: View {
                     .frame(height: CGFloat(data.count) * 36 + 20)
                 }
 
-                // Table rows
                 VStack(spacing: 0) {
                     ForEach(Array(data.enumerated()), id: \.element.category) { idx, item in
                         CategoryTableRow(category: item.category, amount: item.amount, total: total)
@@ -247,7 +605,6 @@ struct DailySpendChartSection: View {
 // MARK: - Trend Chart
 struct TrendChartSection: View {
     @EnvironmentObject var store: TransactionStore
-
     private var trendData: [(month: Date, spend: Double)] { store.monthlyTrend(months: 6) }
 
     var body: some View {
@@ -255,38 +612,22 @@ struct TrendChartSection: View {
             Text("6-Month Spend Trend").font(.headline)
 
             Chart(Array(trendData.enumerated()), id: \.offset) { idx, item in
-                LineMark(
-                    x: .value("Month", idx),
-                    y: .value("Spend",  item.spend)
-                )
-                .foregroundStyle(Color(hex: "#6C63FF"))
-                .lineStyle(StrokeStyle(lineWidth: 2.5))
-
-                AreaMark(
-                    x: .value("Month", idx),
-                    y: .value("Spend",  item.spend)
-                )
-                .foregroundStyle(
-                    LinearGradient(
+                LineMark(x: .value("Month", idx), y: .value("Spend", item.spend))
+                    .foregroundStyle(Color(hex: "#6C63FF"))
+                    .lineStyle(StrokeStyle(lineWidth: 2.5))
+                AreaMark(x: .value("Month", idx), y: .value("Spend", item.spend))
+                    .foregroundStyle(LinearGradient(
                         colors: [Color(hex: "#6C63FF").opacity(0.3), .clear],
-                        startPoint: .top, endPoint: .bottom
-                    )
-                )
-
-                PointMark(
-                    x: .value("Month", idx),
-                    y: .value("Spend",  item.spend)
-                )
-                .foregroundStyle(Color(hex: "#6C63FF"))
-                .symbolSize(50)
+                        startPoint: .top, endPoint: .bottom))
+                PointMark(x: .value("Month", idx), y: .value("Spend", item.spend))
+                    .foregroundStyle(Color(hex: "#6C63FF")).symbolSize(50)
             }
             .frame(height: 220)
             .chartXAxis {
                 AxisMarks(values: Array(0..<trendData.count)) { value in
                     AxisValueLabel {
                         if let idx = value.as(Int.self), idx < trendData.count {
-                            Text(trendData[idx].month.shortMonthYear)
-                                .font(.caption2)
+                            Text(trendData[idx].month.shortMonthYear).font(.caption2)
                         }
                     }
                 }
@@ -314,7 +655,8 @@ struct ComparisonChartSection: View {
     private var items: [BarItem] {[
         BarItem(label: "Income",  amount: store.totalCredit(for: month), color: Color(hex: "#2ECC71")),
         BarItem(label: "Spend",   amount: store.totalSpend(for: month),  color: Color(hex: "#FF6B6B")),
-        BarItem(label: "Savings", amount: max(store.totalCredit(for: month) - store.totalSpend(for: month), 0),
+        BarItem(label: "Savings",
+                amount: max(store.totalCredit(for: month) - store.totalSpend(for: month), 0),
                 color: Color(hex: "#3498DB")),
     ]}
 
@@ -323,12 +665,8 @@ struct ComparisonChartSection: View {
             Text("Income vs Spend").font(.headline)
 
             Chart(items) { item in
-                BarMark(
-                    x: .value("Type",   item.label),
-                    y: .value("Amount", item.amount)
-                )
-                .foregroundStyle(item.color)
-                .cornerRadius(8)
+                BarMark(x: .value("Type", item.label), y: .value("Amount", item.amount))
+                    .foregroundStyle(item.color).cornerRadius(8)
             }
             .frame(height: 200)
 

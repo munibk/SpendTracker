@@ -253,6 +253,9 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		SOURCESPHASE = {
 			isa = PBXSourcesBuildPhase;

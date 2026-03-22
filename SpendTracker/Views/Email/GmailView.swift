@@ -131,12 +131,12 @@ struct GmailView: View {
             .sheet(isPresented: $showSetupGuide) {
                 GmailSetupGuideView()
             }
-            .alert("Import Complete",
+            .alert("Fetch Complete",
                    isPresented: $showFetchResult) {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(fetchCount > 0
-                     ? "✅ Imported \(fetchCount) new transactions from Gmail!"
+                     ? "Found \(fetchCount) emails with transactions. Check your Dashboard!"
                      : "No new bank transactions found in Gmail.")
             }
         }
