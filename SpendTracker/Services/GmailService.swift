@@ -6,7 +6,9 @@ class GmailService: ObservableObject {
 
     static let shared = GmailService()
 
-    private let clientID      = "396449652721-030jr599hc1r67sj22hngg0imt4pha0s.apps.googleusercontent.com"
+    private var clientID: String {
+        UserDefaults.standard.string(forKey: "gmail_client_id") ?? ""
+    }
     private let redirectURI   = "com.yourname.spendtracker:/oauth2callback"
     private let scope         = "https://www.googleapis.com/auth/gmail.readonly"
     private let authEndpoint  = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -33,6 +35,23 @@ class GmailService: ObservableObject {
         set { UserDefaults.standard.set(newValue, forKey: "gmail_token_expiry") }
     }
 
+    var isConfigured: Bool {
+        let id = UserDefaults.standard.string(forKey: "gmail_client_id") ?? ""
+        return !id.isEmpty && id != "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
+    }
+
+    func saveClientID(_ id: String) {
+        UserDefaults.standard.set(id.trimmingCharacters(in: .whitespacesAndNewlines),
+                                  forKey: "gmail_client_id")
+        DispatchQueue.main.async {
+            self.fetchStatus = "Client ID saved ✅"
+        }
+    }
+
+    func savedClientID() -> String {
+        UserDefaults.standard.string(forKey: "gmail_client_id") ?? ""
+    }
+
     private init() {
         isConnected = accessToken != nil && refreshToken != nil
         userEmail   = UserDefaults.standard.string(forKey: "gmail_user_email") ?? ""
@@ -42,8 +61,14 @@ class GmailService: ObservableObject {
     // MARK: OAuth
     // ─────────────────────────────────────────────────────────
     func startLogin() {
-        var components = URLComponents(string: authEndpoint)!
-        components.queryItems = [
+        guard isConfigured else {
+            DispatchQueue.main.async {
+                self.fetchStatus = "⚠️ Please enter Google Client ID first"
+            }
+            return
+        }
+        var c = URLComponents(string: authEndpoint)!
+        c.queryItems = [
             URLQueryItem(name: "client_id",     value: clientID),
             URLQueryItem(name: "redirect_uri",  value: redirectURI),
             URLQueryItem(name: "response_type", value: "code"),
@@ -51,26 +76,26 @@ class GmailService: ObservableObject {
             URLQueryItem(name: "access_type",   value: "offline"),
             URLQueryItem(name: "prompt",        value: "consent"),
         ]
-        guard let url = components.url else { return }
+        guard let url = c.url else { return }
         UIApplication.shared.open(url)
     }
 
     func handleCallback(url: URL) {
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let code = components.queryItems?.first(where: { $0.name == "code" })?.value
+        guard let c    = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let code = c.queryItems?.first(where: { $0.name == "code" })?.value
         else { return }
-        exchangeCodeForToken(code: code)
+        exchangeToken(code: code)
     }
 
-    private func exchangeCodeForToken(code: String) {
+    private func exchangeToken(code: String) {
         guard let url = URL(string: tokenEndpoint) else { return }
-        var req        = URLRequest(url: url)
+        var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        let body = ["code": code, "client_id": clientID,
-                    "redirect_uri": redirectURI, "grant_type": "authorization_code"]
-            .map { "\($0.key)=\($0.value)" }.joined(separator: "&")
-        req.httpBody = body.data(using: .utf8)
+        req.httpBody = ["code": code, "client_id": clientID,
+                        "redirect_uri": redirectURI, "grant_type": "authorization_code"]
+            .map { "\($0.key)=\($0.value)" }.joined(separator: "&").data(using: .utf8)
+
         URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
             guard let self, let data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -78,9 +103,7 @@ class GmailService: ObservableObject {
             DispatchQueue.main.async {
                 if let a = json["access_token"]  as? String { self.accessToken  = a }
                 if let r = json["refresh_token"] as? String { self.refreshToken = r }
-                if let e = json["expires_in"]    as? Double {
-                    self.tokenExpiry = Date().addingTimeInterval(e - 60)
-                }
+                if let e = json["expires_in"]    as? Double { self.tokenExpiry  = Date().addingTimeInterval(e - 60) }
                 self.isConnected = true
                 self.fetchStatus = "Connected ✅"
                 self.fetchUserEmail()
@@ -89,7 +112,7 @@ class GmailService: ObservableObject {
     }
 
     func disconnect() {
-        accessToken  = nil; refreshToken = nil; tokenExpiry = nil
+        accessToken = nil; refreshToken = nil; tokenExpiry = nil
         UserDefaults.standard.removeObject(forKey: "gmail_user_email")
         DispatchQueue.main.async {
             self.isConnected = false; self.userEmail = ""; self.fetchStatus = "Disconnected"
@@ -97,32 +120,25 @@ class GmailService: ObservableObject {
     }
 
     private func refreshAccessToken(completion: @escaping (Bool) -> Void) {
-        guard let refresh = refreshToken, let url = URL(string: tokenEndpoint) else {
-            completion(false); return
-        }
+        guard let r = refreshToken, let url = URL(string: tokenEndpoint) else { completion(false); return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        let body = ["refresh_token": refresh, "client_id": clientID, "grant_type": "refresh_token"]
-            .map { "\($0.key)=\($0.value)" }.joined(separator: "&")
-        req.httpBody = body.data(using: .utf8)
+        req.httpBody = ["refresh_token": r, "client_id": clientID, "grant_type": "refresh_token"]
+            .map { "\($0.key)=\($0.value)" }.joined(separator: "&").data(using: .utf8)
         URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
             guard let self, let data,
                   let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let token = json["access_token"] as? String
             else { completion(false); return }
             self.accessToken = token
-            if let e = json["expires_in"] as? Double {
-                self.tokenExpiry = Date().addingTimeInterval(e - 60)
-            }
+            if let e = json["expires_in"] as? Double { self.tokenExpiry = Date().addingTimeInterval(e - 60) }
             completion(true)
         }.resume()
     }
 
     private func validToken(completion: @escaping (String?) -> Void) {
-        if let expiry = tokenExpiry, Date() < expiry, let token = accessToken {
-            completion(token); return
-        }
+        if let ex = tokenExpiry, Date() < ex, let t = accessToken { completion(t); return }
         refreshAccessToken { [weak self] ok in completion(ok ? self?.accessToken : nil) }
     }
 
@@ -144,92 +160,7 @@ class GmailService: ObservableObject {
     }
 
     // ─────────────────────────────────────────────────────────
-    // MARK: Smart Bank Query
-    // Only fetches TRANSACTION alerts — ignores offers/promotions
-    // Uses Gmail's -category:promotions to exclude marketing emails
-    // ─────────────────────────────────────────────────────────
-    private func buildBankQuery(fromTimestamp: Int) -> String {
-        let senders = [
-            "alerts@axisbank.com",
-            "noreply@axisbank.com",
-            "notify@axisbank.com",
-            "credit_cards@icicibank.com",
-            "autoemail@icicibank.com",
-            "donotreply@icicibank.com",
-            "alerts@hdfcbank.net",
-            "noreply@hdfcbank.com",
-            "sbiatm@sbi.co.in",
-            "noreply@sbi.co.in",
-            "noreply@kotak.com",
-            "alerts@kotak.com",
-            "noreply@yesbank.in",
-            "alerts@indusind.com",
-            "alerts@federalbank.co.in",
-            "alerts@rblbank.com",
-            "alerts@idfcfirstbank.com",
-        ]
-        let fromQuery = senders.map { "from:\($0)" }.joined(separator: " OR ")
-
-        // Broad subject query — catches BOTH debit and credit transactions
-        // Real bank transaction emails use many different subject formats
-        let subjectQuery = "(subject:debited OR subject:credited OR subject:\"transaction alert\" OR subject:\"debit alert\" OR subject:\"credit alert\" OR subject:\"account alert\" OR subject:\"INR\" OR subject:\"used for\" OR subject:\"payment\" OR subject:\"amount credited\" OR subject:\"amount debited\" OR subject:\"money received\" OR subject:\"funds credited\" OR subject:\"neft\" OR subject:\"imps\" OR subject:\"upi\")"
-
-        // Exclude promotional emails only
-        let excludeQuery = "-subject:offer -subject:\"save up to\" -subject:\"get up to\" -subject:\"cashback offer\" -subject:\"pre-approved\" -subject:\"pre-qualified\" -subject:\"loan offer\" -subject:\"upgrade\" -category:promotions -category:social"
-
-        // newer_than:62d — always includes TODAY, timezone safe
-        return "(\(fromQuery)) \(subjectQuery) \(excludeQuery) newer_than:62d"
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // MARK: Intelligent Transaction Filter
-    // Second layer — checks email body before parsing
-    // Rejects emails that don't look like real transactions
-    // ─────────────────────────────────────────────────────────
-    private func isTransactionEmail(subject: String, body: String) -> Bool {
-        let s = subject.lowercased()
-        let b = body.lowercased()
-
-        // ── Hard reject — clear promotional subjects ──────────
-        // Only reject if subject clearly shows it's an offer/promo
-        let promoSubjects = [
-            "save up to", "get up to", "cashback offer",
-            "pre-approved", "pre-qualified", "loan offer",
-            "upgrade your card", "apply now", "limited time",
-            "exclusive offer", "special offer", "earn up to",
-            "lucky draw", "no cost emi", "festive offer",
-            "refer and earn", "activate now", "click here to apply",
-        ]
-        // Only reject if subject matches (not body — body can have these in disclaimers)
-        for kw in promoSubjects {
-            if s.contains(kw) { return false }
-        }
-
-        // ── Must contain transaction amount ───────────────────
-        let hasAmount = b.contains("inr ")   || b.contains("inr.")  ||
-                        b.contains("rs. ")   || b.contains("rs ")   ||
-                        b.contains("₹")      ||
-                        s.contains("inr")    || s.contains("debited") ||
-                        s.contains("credited")
-        guard hasAmount else { return false }
-
-        // ── Must have debit OR credit indicator ───────────────
-        let debitWords  = ["debited","debit","withdrawn","withdrawal","spent",
-                           "purchase","payment","used for","auto debit",
-                           "emi","mandate","pos","neft dr","imps dr"]
-        let creditWords = ["credited","credit","received","deposited","refund",
-                           "cashback","reversed","salary","neft cr","imps cr",
-                           "upi cr","money received","funds received",
-                           "amount credited","transfer received"]
-
-        let hasDebit  = debitWords.contains  { b.contains($0) || s.contains($0) }
-        let hasCredit = creditWords.contains { b.contains($0) || s.contains($0) }
-
-        return hasDebit || hasCredit
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // MARK: Fetch — Last 2 Months Only
+    // MARK: Fetch — Last 2 Months, Smart Filter
     // ─────────────────────────────────────────────────────────
     func fetchBankEmails(store: TransactionStore, completion: @escaping (Int) -> Void) {
         guard isConnected else {
@@ -237,67 +168,53 @@ class GmailService: ObservableObject {
             completion(0); return
         }
 
+        let fmt = DateFormatter(); fmt.dateFormat = "dd MMM"
+        let twoMonthsAgo = Calendar.current.date(byAdding: .month, value: -2, to: Date()) ?? Date()
+        let today        = fmt.string(from: Date())
+        let from         = fmt.string(from: twoMonthsAgo)
+
         DispatchQueue.main.async {
             self.isFetching  = true
-            // Show exact date range so user knows today is included
-            let fmt          = DateFormatter()
-            fmt.dateFormat   = "dd MMM"
-            let twoMonthsAgo = Calendar.current.date(byAdding: .month, value: -2, to: Date()) ?? Date()
-            let from         = fmt.string(from: twoMonthsAgo)
-            let today        = fmt.string(from: Date())
-            self.fetchStatus = "Scanning \(from) → \(today) (today included)..."
+            self.fetchStatus = "Scanning \(from) → \(today)..."
         }
 
         validToken { [weak self] token in
             guard let self, let token else {
-                DispatchQueue.main.async {
-                    self?.isFetching  = false
-                    self?.fetchStatus = "Token expired — reconnect Gmail"
-                }
+                DispatchQueue.main.async { self?.isFetching = false; self?.fetchStatus = "Token expired — reconnect" }
                 completion(0); return
             }
 
-            // Exactly 2 months ago from today (inclusive)
-            // Use start of day 2 months ago to avoid timezone issues
-            let cal          = Calendar.current
-            let twoMonthsAgo = cal.date(byAdding: .month, value: -2, to: Date()) ?? Date()
-            let startOfDay   = cal.startOfDay(for: twoMonthsAgo)
-            let fromTS       = Int(startOfDay.timeIntervalSince1970)
+            // Exact sender addresses — fastest and most accurate
+            let senders = [
+                "alerts@axisbank.com","noreply@axisbank.com","notify@axisbank.com",
+                "credit_cards@icicibank.com","autoemail@icicibank.com","donotreply@icicibank.com",
+                "alerts@hdfcbank.net","noreply@hdfcbank.com",
+                "sbiatm@sbi.co.in","noreply@sbi.co.in",
+                "noreply@kotak.com","alerts@kotak.com",
+                "noreply@yesbank.in","alerts@indusind.com",
+                "alerts@federalbank.co.in","alerts@rblbank.com",
+                "alerts@idfcfirstbank.com",
+            ]
+            let fromQ   = senders.map { "from:\($0)" }.joined(separator: " OR ")
+            let subjQ   = "(subject:debited OR subject:credited OR subject:\"transaction alert\" OR subject:\"debit alert\" OR subject:\"credit alert\" OR subject:\"amount credited\" OR subject:\"amount debited\" OR subject:\"money received\" OR subject:INR OR subject:\"used for\" OR subject:\"credit transaction alert\" OR subject:\"debit transaction alert\" OR subject:\"was debited\" OR subject:\"was credited\")"
+            let excludeQ = "-subject:offer -subject:\"save up to\" -subject:\"get up to\" -subject:\"pre-approved\" -subject:\"pre-qualified\" -subject:\"loan offer\" -subject:upgrade -category:promotions -category:social"
+            let query   = "(\(fromQ)) \(subjQ) \(excludeQ) newer_than:62d"
+            let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+            let urlStr  = "\(self.gmailAPI)/users/me/messages?q=\(encoded)&maxResults=100"
 
-            // Use "newer_than:62d" as backup — Gmail native date filter
-            // This guarantees emails from today are always included
-            let query   = self.buildBankQuery(fromTimestamp: fromTS)
-            let encoded = query.addingPercentEncoding(
-                withAllowedCharacters: .urlQueryAllowed
-            ) ?? ""
-
-            let urlStr = "\(self.gmailAPI)/users/me/messages?q=\(encoded)&maxResults=100"
             guard let url = URL(string: urlStr) else {
-                DispatchQueue.main.async {
-                    self.isFetching  = false
-                    self.fetchStatus = "Invalid URL"
-                }
+                DispatchQueue.main.async { self.isFetching = false; self.fetchStatus = "Invalid URL" }
                 completion(0); return
             }
 
-            self.fetchAllPages(url: url, token: token, accumulated: []) { [weak self] allMessages in
+            self.fetchAllPages(url: url, token: token, accumulated: []) { [weak self] all in
                 guard let self else { return }
-                if allMessages.isEmpty {
-                    DispatchQueue.main.async {
-                        self.isFetching  = false
-                        self.fetchStatus = "No transaction emails found in last 2 months"
-                    }
+                if all.isEmpty {
+                    DispatchQueue.main.async { self.isFetching = false; self.fetchStatus = "No bank emails found" }
                     completion(0)
                 } else {
-                    DispatchQueue.main.async {
-                        self.fetchStatus = "Found \(allMessages.count) emails — filtering..."
-                    }
-                    self.processMessages(
-                        messages:   allMessages,
-                        token:      token,
-                        store:      store,
-                        completion: completion
-                    )
+                    DispatchQueue.main.async { self.fetchStatus = "Processing \(all.count) emails..." }
+                    self.processMessages(messages: all, token: token, store: store, completion: completion)
                 }
             }
         }
@@ -306,34 +223,28 @@ class GmailService: ObservableObject {
     // ─────────────────────────────────────────────────────────
     // MARK: Pagination
     // ─────────────────────────────────────────────────────────
-    private func fetchAllPages(
-        url:         URL,
-        token:       String,
-        accumulated: [[String: Any]],
-        completion:  @escaping ([[String: Any]]) -> Void
-    ) {
+    private func fetchAllPages(url: URL, token: String,
+                               accumulated: [[String: Any]],
+                               completion: @escaping ([[String: Any]]) -> Void) {
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-
         URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
             guard let self, let data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { completion(accumulated); return }
 
-            let pageMessages = json["messages"] as? [[String: Any]] ?? []
-            let combined     = accumulated + pageMessages
-
+            let msgs     = json["messages"] as? [[String: Any]] ?? []
+            let combined = accumulated + msgs
             DispatchQueue.main.async { self.fetchStatus = "Found \(combined.count) emails..." }
 
-            if let nextToken = json["nextPageToken"] as? String, !pageMessages.isEmpty {
-                var comps  = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-                var items  = comps.queryItems ?? []
+            if let next = json["nextPageToken"] as? String, !msgs.isEmpty {
+                var c = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+                var items = c.queryItems ?? []
                 items.removeAll { $0.name == "pageToken" }
-                items.append(URLQueryItem(name: "pageToken", value: nextToken))
-                comps.queryItems = items
-                if let nextURL = comps.url {
-                    self.fetchAllPages(url: nextURL, token: token,
-                                       accumulated: combined, completion: completion)
+                items.append(URLQueryItem(name: "pageToken", value: next))
+                c.queryItems = items
+                if let nextURL = c.url {
+                    self.fetchAllPages(url: nextURL, token: token, accumulated: combined, completion: completion)
                     return
                 }
             }
@@ -342,14 +253,10 @@ class GmailService: ObservableObject {
     }
 
     // ─────────────────────────────────────────────────────────
-    // MARK: Process — with smart filtering
+    // MARK: Process Messages
     // ─────────────────────────────────────────────────────────
-    private func processMessages(
-        messages:   [[String: Any]],
-        token:      String,
-        store:      TransactionStore,
-        completion: @escaping (Int) -> Void
-    ) {
+    private func processMessages(messages: [[String: Any]], token: String,
+                                 store: TransactionStore, completion: @escaping (Int) -> Void) {
         let group  = DispatchGroup()
         var parsed: [Transaction] = []
         var skipped = 0
@@ -358,36 +265,32 @@ class GmailService: ObservableObject {
 
         for message in messages {
             guard let msgID = message["id"] as? String else { continue }
-
             group.enter()
+
             let url = URL(string: "\(gmailAPI)/users/me/messages/\(msgID)?format=full")!
             var req = URLRequest(url: url)
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
             URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
                 defer { group.leave() }
-                guard let self,
-                      let data,
+                guard let self, let data,
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
                 else { return }
 
-                let body    = self.extractEmailContent(from: json)
+                let body    = self.extractContent(from: json)
                 let sender  = self.extractSender(from: json)
                 let subject = self.extractSubject(from: json)
                 let dateMs  = json["internalDate"] as? String ?? "0"
                 let date    = Date(timeIntervalSince1970: (Double(dateMs) ?? 0) / 1000)
 
-                // ── Smart filter: skip promo/junk emails ──────
+                // Smart filter — skip promotional emails
                 guard self.isTransactionEmail(subject: subject, body: body) else {
                     lock.lock(); skipped += 1; lock.unlock()
                     return
                 }
 
-                if let txn = parser.parse(
-                    emailBody: subject + "\n" + body,
-                    sender:    sender,
-                    date:      date
-                ) {
+                // Subject is first line, body follows — parser uses both
+                if let txn = parser.parse(emailBody: subject + "\n" + body, sender: sender, date: date) {
                     lock.lock(); parsed.append(txn); lock.unlock()
                 } else {
                     lock.lock(); skipped += 1; lock.unlock()
@@ -398,27 +301,69 @@ class GmailService: ObservableObject {
         group.notify(queue: .main) { [weak self] in
             guard let self else { return }
             store.addTransactions(parsed)
-            let count          = parsed.count
+            let count = parsed.count
             self.isFetching    = false
             self.lastFetchDate = Date()
             self.importedCount += count
             self.fetchStatus   = count > 0
                 ? "✅ \(count) transactions imported (\(skipped) non-transaction emails skipped)"
-                : "✅ No new transactions found (\(skipped) promotional emails filtered out)"
+                : "✅ All up to date (\(skipped) promotional emails filtered)"
             completion(count)
         }
     }
 
-    func resetProcessedEmails() {
-        DispatchQueue.main.async {
-            self.fetchStatus = "Ready — tap Fetch to scan last 2 months"
+    // ─────────────────────────────────────────────────────────
+    // MARK: Smart Filter — skip promos
+    // ─────────────────────────────────────────────────────────
+    private func isTransactionEmail(subject: String, body: String) -> Bool {
+        let s = subject.lowercased()
+        let b = body.lowercased()
+
+        // Hard reject — DECLINED / FAILED transactions (scan full body)
+        let declineWords = [
+            "has been declined", "was declined", "transaction declined",
+            "payment declined", "declined on", "been declined",
+            "not successful", "unsuccessful", "transaction failed",
+            "payment failed", "could not be processed", "not processed",
+            "insufficient funds", "insufficient balance",
+            "rejected", "not authorised", "not authorized",
+            "transaction blocked", "unable to process",
+            "domestic online transactions is disabled",
+            "enable the service", "enable the facility",
+            "we regret to inform"
+        ]
+        for kw in declineWords {
+            if s.contains(kw) || b.contains(kw) { return false }
         }
+
+        // Hard reject — clear promotional subjects
+        let promoSubjects = ["save up to","get up to","cashback offer","pre-approved",
+                             "pre-qualified","loan offer","upgrade your card","apply now",
+                             "limited time","exclusive offer","special offer","earn up to",
+                             "lucky draw","no cost emi","festive offer","refer and earn",
+                             "activate now","click here to apply"]
+        for kw in promoSubjects { if s.contains(kw) { return false } }
+
+        // Must have amount
+        let hasAmount = b.contains("inr ") || b.contains("inr.") ||
+                        b.contains("rs. ") || b.contains("rs ")  || b.contains("₹") ||
+                        s.contains("inr")  || s.contains("debited") || s.contains("credited")
+        guard hasAmount else { return false }
+
+        // Must have debit or credit indicator
+        let hasDebit  = ["debited","debit","withdrawn","purchase","payment",
+                         "used for","auto debit","emi","pos"].contains { b.contains($0) || s.contains($0) }
+        let hasCredit = ["credited","credit","received","deposited","refund",
+                         "cashback","salary","neft cr","imps cr","upi cr",
+                         "money received","amount credited"].contains { b.contains($0) || s.contains($0) }
+
+        return hasDebit || hasCredit
     }
 
     // ─────────────────────────────────────────────────────────
-    // MARK: Email Extraction Helpers
+    // MARK: Email Content Helpers
     // ─────────────────────────────────────────────────────────
-    private func extractEmailContent(from json: [String: Any]) -> String {
+    private func extractContent(from json: [String: Any]) -> String {
         guard let payload = json["payload"] as? [String: Any] else { return "" }
         if let body = payload["body"] as? [String: Any],
            let data = body["data"] as? String { return decodeBase64(data) }
@@ -453,14 +398,18 @@ class GmailService: ObservableObject {
     }
 
     private func decodeBase64(_ string: String) -> String {
-        let b64 = string
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
+        let b64 = string.replacingOccurrences(of: "-", with: "+")
+                        .replacingOccurrences(of: "_", with: "/")
         guard let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters) else { return "" }
         let raw = String(data: data, encoding: .utf8) ?? ""
-        return raw
-            .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
-            .replacingOccurrences(of: "\\s+",    with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+                  .replacingOccurrences(of: "\\s+",    with: " ", options: .regularExpression)
+                  .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func resetProcessedEmails() {
+        DispatchQueue.main.async {
+            self.fetchStatus = "Ready — tap Fetch to re-scan last 2 months"
+        }
     }
 }

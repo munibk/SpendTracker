@@ -8,10 +8,92 @@ struct GmailView: View {
     @State private var showSetupGuide   = false
     @State private var fetchCount       = 0
     @State private var showFetchResult  = false
+    @State private var clientIDText     = ""
+    @State private var showClientIDSaved = false
 
     var body: some View {
         NavigationView {
             List {
+
+                // ── Client ID Setup ───────────────────────────
+                Section(header: Text("Google Client ID")) {
+                    if gmail.isConfigured {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Client ID Configured")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                Text(gmail.savedClientID().prefix(30) + "...")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        Button(action: { clientIDText = gmail.savedClientID() }) {
+                            Label("Change Client ID", systemImage: "pencil")
+                                .foregroundColor(Color(hex: "#6C63FF"))
+                        }
+                    } else {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Enter your Google OAuth Client ID")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            TextField("xxxxx.apps.googleusercontent.com",
+                                     text: $clientIDText)
+                                .font(.caption)
+                                .autocapitalization(.none)
+                                .autocorrectionDisabled()
+                            Button(action: saveClientID) {
+                                Label("Save Client ID", systemImage: "checkmark.circle.fill")
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(8)
+                                    .background(clientIDText.isEmpty
+                                                ? Color.gray
+                                                : Color(hex: "#6C63FF"))
+                                    .cornerRadius(8)
+                            }
+                            .disabled(clientIDText.isEmpty)
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.vertical, 4)
+                    }
+
+                    // Show text field to change if configured
+                    if gmail.isConfigured && !clientIDText.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            TextField("xxxxx.apps.googleusercontent.com",
+                                     text: $clientIDText)
+                                .font(.caption)
+                                .autocapitalization(.none)
+                                .autocorrectionDisabled()
+                            Button(action: saveClientID) {
+                                Label("Update Client ID", systemImage: "checkmark.circle.fill")
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(8)
+                                    .background(Color(hex: "#6C63FF"))
+                                    .cornerRadius(8)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.vertical, 4)
+                    }
+
+                    if showClientIDSaved {
+                        Text("✅ Client ID saved successfully!")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    }
+
+                    Button(action: { showSetupGuide = true }) {
+                        Label("How to get Client ID?",
+                              systemImage: "questionmark.circle")
+                            .font(.caption)
+                            .foregroundColor(Color(hex: "#6C63FF"))
+                    }
+                }
 
                 // ── Connection Status ─────────────────────────
                 Section {
@@ -228,6 +310,15 @@ struct GmailView: View {
     }
 
     // ── Fetch Emails ──────────────────────────────────────────
+    private func saveClientID() {
+        gmail.saveClientID(clientIDText)
+        showClientIDSaved = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            showClientIDSaved = false
+            clientIDText = ""
+        }
+    }
+
     private func rescanAllEmails() {
         gmail.resetProcessedEmails()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {

@@ -13,6 +13,19 @@ class SMSParserService {
     // ─────────────────────────────────────────────────────────────
     func parse(smsBody: String, sender: String) -> Transaction? {
         guard isBankSMS(body: smsBody.lowercased(), sender: sender.lowercased()) else { return nil }
+
+        // Skip DECLINED / FAILED transactions — use specific phrases
+        let b = smsBody.lowercased()
+        let declineWords = [
+            "has been declined", "was declined", "transaction declined",
+            "payment declined", "been declined", "not successful",
+            "unsuccessful", "transaction failed", "payment failed",
+            "could not be processed", "insufficient funds",
+            "insufficient balance", "not authorised", "not authorized",
+            "transaction blocked", "enable the service"
+        ]
+        for kw in declineWords { if b.contains(kw) { return nil } }
+
         guard let type   = extractTransactionType(body: smsBody) else { return nil }
         guard let amount = extractAmount(body: smsBody)           else { return nil }
 
