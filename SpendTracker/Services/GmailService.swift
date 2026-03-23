@@ -195,7 +195,9 @@ class GmailService: ObservableObject {
         "from:alerts@indusind.com",
         "subject:transaction alert",
         "subject:debited",
+        "subject:debit",          // catches "Debit transaction alert" (no trailing d)
         "subject:credited",
+        "subject:credit",         // catches "Credit transaction alert"
         "subject:\"was debited\"",
         "subject:\"was credited\"",
         "subject:\"credit transaction alert\"",
@@ -223,34 +225,62 @@ class GmailService: ObservableObject {
                 completion(0); return
             }
 
-            // Wrap in parens + restrict to last 62 days so cached emails are never re-fetched
-            let query   = "(" + self.bankQueries.joined(separator: " OR ") + ") newer_than:62d"
-            let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-            let urlStr  = "\(self.gmailAPI)/users/me/messages?q=\(encoded)&maxResults=100"
-
-            guard let url = URL(string: urlStr) else { completion(0); return }
-            var req = URLRequest(url: url)
-            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-
-            URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
-                guard let self, let data,
-                      let json     = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let messages = json["messages"] as? [[String: Any]]
-                else {
+            // Fetch all pages — Gmail returns up to 500 per page,
+            // nextPageToken signals more results exist.
+            let query = "(" + self.bankQueries.joined(separator: " OR ") + ") newer_than:62d"
+            self.fetchAllMessageIDs(query: query, token: token) { [weak self] messages in
+                guard let self else { return }
+                if messages.isEmpty {
                     DispatchQueue.main.async {
-                        self?.isFetching  = false
-                        self?.fetchStatus = "No bank emails found"
+                        self.isFetching  = false
+                        self.fetchStatus = "No bank emails found"
                     }
                     completion(0); return
                 }
-
                 DispatchQueue.main.async {
                     self.fetchStatus = "Found \(messages.count) emails, parsing..."
                 }
                 self.processMessages(messages: messages, token: token,
                                      store: store, completion: completion)
-            }.resume()
+            }
         }
+    }
+
+    // Paginates through all Gmail results for the given query.
+    // Gmail API max per page is 500; follows nextPageToken until exhausted.
+    private func fetchAllMessageIDs(query: String, token: String,
+                                    pageToken: String? = nil,
+                                    accumulated: [[String: Any]] = [],
+                                    completion: @escaping ([[String: Any]]) -> Void) {
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        var urlStr  = "\(gmailAPI)/users/me/messages?q=\(encoded)&maxResults=500"
+        if let pt = pageToken { urlStr += "&pageToken=\(pt)" }
+
+        guard let url = URL(string: urlStr) else { completion(accumulated); return }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
+            guard let self, let data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { completion(accumulated); return }
+
+            let newMessages = (json["messages"] as? [[String: Any]]) ?? []
+            let all         = accumulated + newMessages
+            let next        = json["nextPageToken"] as? String
+
+            if let next, !next.isEmpty {
+                // More pages available — keep fetching
+                DispatchQueue.main.async {
+                    self.fetchStatus = "Found \(all.count) emails, loading more..."
+                }
+                self.fetchAllMessageIDs(query: query, token: token,
+                                        pageToken: next, accumulated: all,
+                                        completion: completion)
+            } else {
+                completion(all)
+            }
+        }.resume()
     }
 
     // Re-scan: clear processed cache
