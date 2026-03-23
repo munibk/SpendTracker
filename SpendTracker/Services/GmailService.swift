@@ -168,6 +168,11 @@ class GmailService: ObservableObject {
             completion(0); return
         }
 
+        guard isConfigured else {
+            DispatchQueue.main.async { self.fetchStatus = "⚠️ Enter Google Client ID first" }
+            completion(0); return
+        }
+
         let fmt = DateFormatter(); fmt.dateFormat = "dd MMM"
         let twoMonthsAgo = Calendar.current.date(byAdding: .month, value: -2, to: Date()) ?? Date()
         let today        = fmt.string(from: Date())
@@ -180,42 +185,104 @@ class GmailService: ObservableObject {
 
         validToken { [weak self] token in
             guard let self, let token else {
-                DispatchQueue.main.async { self?.isFetching = false; self?.fetchStatus = "Token expired — reconnect" }
+                DispatchQueue.main.async {
+                    self?.isFetching  = false
+                    self?.fetchStatus = "Token expired — reconnect Gmail"
+                }
                 completion(0); return
             }
 
-            // Exact sender addresses — fastest and most accurate
-            let senders = [
-                "alerts@axisbank.com","noreply@axisbank.com","notify@axisbank.com",
-                "credit_cards@icicibank.com","autoemail@icicibank.com","donotreply@icicibank.com",
-                "alerts@hdfcbank.net","noreply@hdfcbank.com",
-                "sbiatm@sbi.co.in","noreply@sbi.co.in",
-                "noreply@kotak.com","alerts@kotak.com",
-                "noreply@yesbank.in","alerts@indusind.com",
-                "alerts@federalbank.co.in","alerts@rblbank.com",
-                "alerts@idfcfirstbank.com",
+            // Domain-based sender filter — catches ALL emails from bank domains
+            // More reliable than exact email addresses which can vary
+            let senderDomains = [
+                "axisbank.com",
+                "icicibank.com",
+                "hdfcbank.net",
+                "hdfcbank.com",
+                "sbi.co.in",
+                "kotak.com",
+                "yesbank.in",
+                "indusind.com",
+                "federalbank.co.in",
+                "rblbank.com",
+                "idfcfirstbank.com",
+                "bandhanbank.com",
+                "aubank.in",
             ]
-            let fromQ   = senders.map { "from:\($0)" }.joined(separator: " OR ")
-            let subjQ   = "(subject:debited OR subject:credited OR subject:\"transaction alert\" OR subject:\"debit alert\" OR subject:\"credit alert\" OR subject:\"amount credited\" OR subject:\"amount debited\" OR subject:\"money received\" OR subject:INR OR subject:\"used for\" OR subject:\"credit transaction alert\" OR subject:\"debit transaction alert\" OR subject:\"was debited\" OR subject:\"was credited\")"
-            let excludeQ = "-subject:offer -subject:\"save up to\" -subject:\"get up to\" -subject:\"pre-approved\" -subject:\"pre-qualified\" -subject:\"loan offer\" -subject:upgrade -category:promotions -category:social"
+            let fromQ = senderDomains.map { "from:@\($0)" }.joined(separator: " OR ")
+
+            // Broad subject — catches ALL transaction formats
+            let subjQ = "(subject:debited OR subject:credited OR subject:INR OR subject:\"transaction alert\" OR subject:\"debit alert\" OR subject:\"credit alert\" OR subject:\"was debited\" OR subject:\"was credited\" OR subject:\"amount debited\" OR subject:\"amount credited\" OR subject:\"credit transaction\" OR subject:\"debit transaction\")"
+
+            // Only exclude obvious promotions
+            let excludeQ = "-subject:\"save up to\" -subject:\"get up to\" -subject:\"pre-approved\" -subject:\"pre-qualified\" -subject:\"loan offer\" -category:promotions"
+
             let query   = "(\(fromQ)) \(subjQ) \(excludeQ) newer_than:62d"
             let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
             let urlStr  = "\(self.gmailAPI)/users/me/messages?q=\(encoded)&maxResults=100"
 
+            DispatchQueue.main.async {
+                self.fetchStatus = "Querying Gmail..."
+            }
+
             guard let url = URL(string: urlStr) else {
-                DispatchQueue.main.async { self.isFetching = false; self.fetchStatus = "Invalid URL" }
+                DispatchQueue.main.async {
+                    self.isFetching  = false
+                    self.fetchStatus = "Invalid URL — check Client ID"
+                }
                 completion(0); return
             }
 
             self.fetchAllPages(url: url, token: token, accumulated: []) { [weak self] all in
                 guard let self else { return }
-                if all.isEmpty {
-                    DispatchQueue.main.async { self.isFetching = false; self.fetchStatus = "No bank emails found" }
-                    completion(0)
-                } else {
-                    DispatchQueue.main.async { self.fetchStatus = "Processing \(all.count) emails..." }
-                    self.processMessages(messages: all, token: token, store: store, completion: completion)
+
+                DispatchQueue.main.async {
+                    self.fetchStatus = "Found \(all.count) emails from bank senders..."
                 }
+
+                if all.isEmpty {
+                    // Try fallback — broader search without sender filter
+                    self.fetchWithFallback(token: token, store: store, completion: completion)
+                } else {
+                    self.processMessages(messages: all, token: token,
+                                         store: store, completion: completion)
+                }
+            }
+        }
+    }
+
+    // ── Fallback: search only by subject if sender filter returns nothing ──
+    private func fetchWithFallback(token: String, store: TransactionStore,
+                                   completion: @escaping (Int) -> Void) {
+        DispatchQueue.main.async {
+            self.fetchStatus = "Trying subject-only search..."
+        }
+
+        // No sender filter at all — just subject keywords
+        // This catches banks not in our domain list
+        let fallbackQuery = "(subject:debited OR subject:credited OR subject:INR OR subject:\"transaction alert\" OR subject:\"debit alert\" OR subject:\"credit alert\" OR subject:\"was debited\" OR subject:\"was credited\" OR subject:\"amount debited\" OR subject:\"amount credited\") newer_than:62d -category:promotions -subject:\"save up to\" -subject:\"pre-approved\""
+
+        let encoded = fallbackQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let urlStr  = "\(self.gmailAPI)/users/me/messages?q=\(encoded)&maxResults=100"
+
+        guard let url = URL(string: urlStr) else { completion(0); return }
+
+        fetchAllPages(url: url, token: token, accumulated: []) { [weak self] all in
+            guard let self else { return }
+
+            DispatchQueue.main.async {
+                self.fetchStatus = "Subject search found \(all.count) emails..."
+            }
+
+            if all.isEmpty {
+                DispatchQueue.main.async {
+                    self.isFetching  = false
+                    self.fetchStatus = "❌ No transaction emails found — make sure bank emails are in this Gmail account"
+                }
+                completion(0)
+            } else {
+                self.processMessages(messages: all, token: token,
+                                     store: store, completion: completion)
             }
         }
     }
@@ -260,6 +327,7 @@ class GmailService: ObservableObject {
         let group  = DispatchGroup()
         var parsed: [Transaction] = []
         var skipped = 0
+        var declined = 0
         let lock   = NSLock()
         let parser = EmailParserService.shared
 
@@ -283,14 +351,25 @@ class GmailService: ObservableObject {
                 let dateMs  = json["internalDate"] as? String ?? "0"
                 let date    = Date(timeIntervalSince1970: (Double(dateMs) ?? 0) / 1000)
 
-                // Smart filter — skip promotional emails
-                guard self.isTransactionEmail(subject: subject, body: body) else {
-                    lock.lock(); skipped += 1; lock.unlock()
+                // Check for declined first
+                let bl = body.lowercased()
+                let sl = subject.lowercased()
+                let declineWords = ["has been declined","was declined","transaction declined",
+                                    "payment declined","been declined","not successful",
+                                    "unsuccessful","transaction failed","payment failed",
+                                    "domestic online transactions is disabled",
+                                    "enable the service","enable the facility",
+                                    "insufficient funds","rejected","not authorised",
+                                    "not authorized","unable to process"]
+                let isDeclined = declineWords.contains { sl.contains($0) || bl.contains($0) }
+                if isDeclined {
+                    lock.lock(); declined += 1; lock.unlock()
                     return
                 }
 
-                // Subject is first line, body follows — parser uses both
-                if let txn = parser.parse(emailBody: subject + "\n" + body, sender: sender, date: date) {
+                // Try to parse — EmailParserService does its own validation
+                if let txn = parser.parse(emailBody: subject + "\n" + body,
+                                          sender: sender, date: date) {
                     lock.lock(); parsed.append(txn); lock.unlock()
                 } else {
                     lock.lock(); skipped += 1; lock.unlock()
@@ -305,9 +384,13 @@ class GmailService: ObservableObject {
             self.isFetching    = false
             self.lastFetchDate = Date()
             self.importedCount += count
-            self.fetchStatus   = count > 0
-                ? "✅ \(count) transactions imported (\(skipped) non-transaction emails skipped)"
-                : "✅ All up to date (\(skipped) promotional emails filtered)"
+            if count > 0 {
+                self.fetchStatus = "✅ \(count) transactions imported (\(declined) declined, \(skipped) other skipped)"
+            } else if declined > 0 {
+                self.fetchStatus = "⚠️ Found \(messages.count) emails but all were declined/unreadable (\(declined) declined)"
+            } else {
+                self.fetchStatus = "⚠️ Found \(messages.count) emails but could not parse any transactions — check email format"
+            }
             completion(count)
         }
     }
