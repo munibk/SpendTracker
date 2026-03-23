@@ -15,15 +15,18 @@ class EmailParserService {
         let cleaned = cleanText(emailBody)
         let b       = cleaned.lowercased()
 
-        // ── Reject DECLINED / FAILED transactions first ───────
+        // ── Reject DECLINED / FAILED transactions ─────────────
+        // IMPORTANT: Use only phrases that appear EXCLUSIVELY in decline emails.
+        // DO NOT use "not authorized" / "not authorised" — these appear in the
+        // standard footer of ALL successful bank transaction emails:
+        //   e.g. "If this transaction was not authorised by you, please call..."
+        // Similarly avoid "unable to process" / "could not be processed" since
+        // they appear in generic email footers too.
         let declineWords = [
             "has been declined", "was declined", "transaction declined",
-            "payment declined", "been declined", "not successful",
-            "unsuccessful", "transaction failed", "payment failed",
+            "payment declined", "been declined",
+            "transaction failed", "payment failed",
             "domestic online transactions is disabled",
-            "enable the service", "enable the facility",
-            "insufficient funds", "not authorised", "not authorized",
-            "could not be processed", "unable to process"
         ]
         for kw in declineWords {
             if b.contains(kw) { return nil }
@@ -109,7 +112,7 @@ class EmailParserService {
         let b = body.lowercased()
 
         let debitWords = [
-            "was debited", "has been debited", "debited from",
+            "was debited from your", "has been debited", "debited from",
             "card.*used for", "has been used for", "purchase of",
             "payment of", "spent", "withdrawn", "withdrawal",
             "auto debit", "mandate",
