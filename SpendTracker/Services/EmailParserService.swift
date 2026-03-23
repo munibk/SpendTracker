@@ -200,6 +200,16 @@ class EmailParserService {
             }
         }
 
+        // ACH / bank transfer — "debited/credited ... by NAME"
+        // e.g. "debited with INR 48377.00 ... by ACH-DR-TP ACH ICICI BANK-2"
+        let byName = #"(?:debited|credited).{0,120}?\bby\s+([A-Za-z][A-Za-z0-9 &._\-]{2,50})(?=[.\n]|$)"#
+        if let re = try? NSRegularExpression(pattern: byName, options: .caseInsensitive),
+           let m  = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
+           let r  = Range(m.range(at: 1), in: body) {
+            let candidate = String(body[r]).trimmingCharacters(in: .whitespaces)
+            if candidate.count > 2, !isGeneric(candidate) { return beautify(candidate) }
+        }
+
         // UPI VPA before @
         if let upi = smsParser.extractUPIId(body: body) {
             let name = upi.components(separatedBy: "@").first ?? ""
@@ -305,9 +315,12 @@ class EmailParserService {
     }
 
     private func beautify(_ s: String) -> String {
-        s.split(separator: " ")
-         .map { $0.prefix(1).uppercased() + $0.dropFirst().lowercased() }
-         .joined(separator: " ")
+        var t = s.trimmingCharacters(in: .whitespaces)
+        // Strip trailing punctuation (e.g. "GROCERY." → "GROCERY", "NOKI." → "NOKI")
+        while let last = t.last, ".,;:!?".contains(last) { t.removeLast() }
+        return t.split(separator: " ")
+                .map { $0.prefix(1).uppercased() + $0.dropFirst().lowercased() }
+                .joined(separator: " ")
     }
 
     private func cleanText(_ text: String) -> String {
