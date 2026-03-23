@@ -9,7 +9,73 @@ class EmailParserService {
     private let smsParser = SMSParserService.shared
 
     // ─────────────────────────────────────────────────────────
-    // MARK: Main Entry Point
+    // MARK: Multi-Transaction Entry Point
+    // Some bank emails contain multiple transactions in one email
+    // (e.g. Axis Bank daily digest, ICICI weekly summary).
+    // Strategy: split on transaction boundaries and parse each chunk.
+    // Falls back to single parse() if no split point found.
+    // ─────────────────────────────────────────────────────────
+    func parseAll(emailBody: String, sender: String, date: Date) -> [Transaction] {
+        let cleaned = cleanText(emailBody)
+
+        // Split boundaries — patterns that start a new transaction block:
+        // "Amount Debited:" / "Amount Credited:" repeating in same email,
+        // or "INR X.XX was debited/credited" appearing multiple times.
+        let splitPatterns = [
+            #"(?=Amount\s+(?:Debited|Credited)\s*:)"#,
+            #"(?=INR\s+[0-9,]+(?:\.[0-9]{1,2})?\s+(?:was\s+)?(?:debited|credited))"#,
+            #"(?=Rs\.?\s+[0-9,]+(?:\.[0-9]{1,2})?\s+(?:was\s+)?(?:debited|credited))"#,
+        ]
+
+        var chunks: [String] = []
+        for pattern in splitPatterns {
+            if let re = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
+                let range   = NSRange(cleaned.startIndex..., in: cleaned)
+                let matches = re.matches(in: cleaned, range: range)
+                if matches.count > 1 {
+                    // Found multiple transaction blocks — split on them
+                    var positions = matches.map { Range($0.range, in: cleaned)!.lowerBound }
+                    positions.append(cleaned.endIndex)
+                    chunks = zip(positions, positions.dropFirst()).map {
+                        String(cleaned[$0..<$1])
+                    }
+                    break
+                }
+            }
+        }
+
+        // No multi-transaction split found — treat as single email
+        if chunks.isEmpty {
+            if let txn = parse(emailBody: cleaned, sender: sender, date: date) {
+                return [txn]
+            }
+            return []
+        }
+
+        // Parse each chunk, prepend original subject (first line) to each
+        let subject = cleaned.components(separatedBy: "\n").first ?? ""
+        var results: [Transaction] = []
+        for chunk in chunks {
+            let chunkWithSubject = subject + "\n" + chunk
+            if let txn = parse(emailBody: chunkWithSubject, sender: sender, date: date) {
+                results.append(txn)
+            }
+        }
+        // Deduplicate: if all chunks parsed to same amount+type it was a false split
+        if results.count > 1 {
+            let unique = results.reduce(into: [Transaction]()) { acc, txn in
+                let isDup = acc.contains {
+                    abs($0.amount - txn.amount) < 0.01 && $0.type == txn.type
+                }
+                if !isDup { acc.append(txn) }
+            }
+            return unique
+        }
+        return results
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // MARK: Main Entry Point (single transaction)
     // ─────────────────────────────────────────────────────────
     func parse(emailBody: String, sender: String, date: Date) -> Transaction? {
         let cleaned = cleanText(emailBody)
@@ -209,8 +275,13 @@ class EmailParserService {
         if let re = try? NSRegularExpression(pattern: byName, options: .caseInsensitive),
            let m  = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
            let r  = Range(m.range(at: 1), in: body) {
-            let candidate = String(body[r]).trimmingCharacters(in: .whitespaces)
-            if candidate.count > 2, !isGeneric(candidate) { return beautify(candidate) }
+            let raw = String(body[r]).trimmingCharacters(in: .whitespaces)
+            if raw.count > 2, !isGeneric(raw) {
+                // For ACH entries like "ACH-DR-TP ACH ICICI BANK-2"
+                // extract just the bank name (last recognisable bank token)
+                let achClean = cleanACHMerchant(raw)
+                return beautify(achClean)
+            }
         }
 
         // UPI VPA before @
@@ -309,6 +380,32 @@ class EmailParserService {
     // ─────────────────────────────────────────────────────────
     // MARK: Helpers
     // ─────────────────────────────────────────────────────────
+
+    // Converts "ACH-DR-TP ACH ICICI BANK-2" → "ICICI Bank EMI"
+    // Strips ACH/NACH/TP prefixes and trailing sequence numbers
+    private func cleanACHMerchant(_ raw: String) -> String {
+        let knownBanks = ["HDFC", "ICICI", "SBI", "AXIS", "KOTAK", "YES",
+                          "INDUSIND", "IDFC", "FEDERAL", "RBL", "PNB", "BOB",
+                          "CANARA", "UNION", "BAJAJ", "TATA CAPITAL", "FULLERTON",
+                          "CHOLAMANDALAM", "MUTHOOT", "MANAPPURAM", "L&T FINANCE"]
+        let upper = raw.uppercased()
+        for bank in knownBanks {
+            if upper.contains(bank) {
+                // Title-case the bank name and append "EMI" for clarity
+                let name = bank.prefix(1).uppercased() + bank.dropFirst().lowercased()
+                return "\(name) Bank EMI"
+            }
+        }
+        // Not a known bank — strip "ACH-DR", "NACH", "TP", trailing digits
+        var cleaned = raw
+            .replacingOccurrences(of: #"ACH[\-]?DR[\-]?TP\s*"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"NACH\s*"#, with: "", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: #"ACH\s*"#, with: "", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: #"-\d+$"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? raw : cleaned
+    }
+
     private func isGeneric(_ s: String) -> Bool {
         let stop = ["your","the","this","that","bank","account","card",
                     "debit","credit","amount","balance","transaction",

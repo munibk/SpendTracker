@@ -11,6 +11,7 @@ struct DashboardView: View {
     private var currentMonth: Date { Date() }
     private var totalSpend:   Double { store.totalSpend(for: currentMonth) }
     private var totalCredit:  Double { store.totalCredit(for: currentMonth) }
+    private var totalEMI:     Double { store.totalEMI(for: currentMonth) }
     private var recentTransactions: [Transaction] {
         Array(store.transactions(for: currentMonth).prefix(5))
     }
@@ -70,7 +71,7 @@ struct DashboardView: View {
                     Text("₹\(Int(totalSpend))")
                         .font(.system(size: 42, weight: .bold, design: .rounded))
                         .foregroundColor(.white)
-                    Text("Total Spent This Month")
+                    Text("Spent This Month (excl. EMI)")
                         .font(.caption).foregroundColor(.white.opacity(0.7))
                 }
                 Spacer()
@@ -110,15 +111,21 @@ struct DashboardView: View {
 
     // MARK: - Summary Cards
     private var summaryCards: some View {
-        HStack(spacing: 12) {
-            SummaryCard(title: "Income",       amount: totalCredit,
-                        icon: "arrow.down.circle.fill", color: Color(hex: "#2ECC71"))
-            SummaryCard(title: "Savings",      amount: max(totalCredit - totalSpend, 0),
-                        icon: "banknote.fill",           color: Color(hex: "#3498DB"))
-            SummaryCard(title: "Transactions",
-                        amount: Double(store.transactions(for: currentMonth).count),
-                        icon: "list.bullet",             color: Color(hex: "#9B59B6"),
-                        isCount: true)
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                SummaryCard(title: "Income",   amount: totalCredit,
+                            icon: "arrow.down.circle.fill", color: Color(hex: "#2ECC71"))
+                SummaryCard(title: "Savings",  amount: max(totalCredit - totalSpend - totalEMI, 0),
+                            icon: "banknote.fill",           color: Color(hex: "#3498DB"))
+            }
+            HStack(spacing: 12) {
+                SummaryCard(title: "EMI Paid", amount: totalEMI,
+                            icon: "dollarsign.circle.fill",  color: Color(hex: "#F0808A"))
+                SummaryCard(title: "Transactions",
+                            amount: Double(store.transactions(for: currentMonth).count),
+                            icon: "list.bullet",             color: Color(hex: "#9B59B6"),
+                            isCount: true)
+            }
         }
     }
 

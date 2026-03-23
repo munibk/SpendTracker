@@ -188,6 +188,7 @@ class GmailService: ObservableObject {
         "from:alerts@axisbank.com",
         "from:noreply@axisbank.com",
         "from:notify@axisbank.com",
+        "from:alerts@axis.bank.in",   // actual Axis Bank sender domain
         "from:noreply@kotak.com",
         "from:alerts@kotak.com",
         "from:noreply@yesbank.in",
@@ -305,9 +306,11 @@ class GmailService: ObservableObject {
                 // The user can tap "Re-scan" to clear the cache and retry everything.
                 UserDefaults.standard.set(true, forKey: processedKey)
 
-                if let txn = parser.parse(emailBody: full, sender: sender, date: date) {
-                    DispatchQueue.main.async { store.addTransaction(txn) }
-                    lock.lock(); count += 1; lock.unlock()
+                // parseAll handles both single and multi-transaction emails
+                let txns = parser.parseAll(emailBody: full, sender: sender, date: date)
+                if !txns.isEmpty {
+                    DispatchQueue.main.async { txns.forEach { store.addTransaction($0) } }
+                    lock.lock(); count += txns.count; lock.unlock()
                 }
             }.resume()
         }

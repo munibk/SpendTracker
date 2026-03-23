@@ -287,12 +287,8 @@ struct GmailView: View {
     private var bankList: some View {
         VStack(alignment: .leading, spacing: 6) {
             let banks = [
-                ("HDFC Bank",  "alerts@hdfcbank.net"),
                 ("ICICI Bank", "credit_cards@icicibank.com"),
-                ("SBI",        "sbiatm@sbi.co.in"),
-                ("Axis Bank",  "alerts@axisbank.com"),
-                ("Kotak",      "noreply@kotak.com"),
-                ("All Banks",  "Subject keywords"),
+                ("Axis Bank",  "alerts@axis.bank.in"),
             ]
             ForEach(banks, id: \.0) { bank in
                 HStack {

@@ -127,8 +127,17 @@ class TransactionStore: ObservableObject {
         return result
     }
 
+    // Total spend excludes EMI — EMI is shown separately on the dashboard
     func totalSpend(for month: Date) -> Double {
-        transactions(for: month).filter { $0.type == .debit }.reduce(0) { $0 + $1.amount }
+        transactions(for: month)
+            .filter { $0.type == .debit && $0.category != .emi }
+            .reduce(0) { $0 + $1.amount }
+    }
+
+    func totalEMI(for month: Date) -> Double {
+        transactions(for: month)
+            .filter { $0.type == .debit && $0.category == .emi }
+            .reduce(0) { $0 + $1.amount }
     }
 
     func totalCredit(for month: Date) -> Double {

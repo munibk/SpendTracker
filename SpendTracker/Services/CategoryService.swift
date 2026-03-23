@@ -39,6 +39,15 @@ class CategoryService {
         // 1. User override (highest priority)
         if let override = userOverrides[ml] { return override }
 
+        // 1b. ACH bank-to-bank debit → EMI / loan repayment
+        // Pattern: ACH-DR or NACH debit from one bank to another bank.
+        // e.g. merchant "ACH-DR-TP ACH ICICI BANK-2" or body contains "ach" + a bank name.
+        // This is always an EMI / loan instalment — never a UPI transfer or shopping.
+        let isACH = ml.contains("ach-dr") || ml.contains("nach") ||
+                    bl.contains("ach-dr") || bl.contains("nach debit") ||
+                    bl.contains("ach mandate") || bl.contains("nach mandate")
+        if isACH { return .emi }
+
         // 2. UPI check FIRST — before ATM
         // If body mentions UPI/IMPS/NEFT with a reference number
         // it is a UPI transfer NOT ATM withdrawal
