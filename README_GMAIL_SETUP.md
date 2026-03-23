@@ -34,7 +34,7 @@ It only requests READ-ONLY access — it never sends, modifies, or deletes email
    - Add your Gmail as a **Test User**
 4. Back to Create OAuth Client ID:
    - Application type: **iOS**
-   - Bundle ID: `com.yourname.spendtracker`
+   - Bundle ID: `com.munibk.spendtracker`
    - Click **Create**
 5. Copy the **Client ID** (looks like: `123456789-abc123.apps.googleusercontent.com`)
 

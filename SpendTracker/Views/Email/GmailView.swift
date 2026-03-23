@@ -477,7 +477,7 @@ struct GmailSetupGuideView: View {
                         Text("1. Go to APIs & Services → Credentials")
                         Text("2. Create Credentials → OAuth Client ID")
                         Text("3. Application type: iOS")
-                        Text("4. Bundle ID: com.yourname.spendtracker")
+                        Text("4. Bundle ID: com.munibk.spendtracker")
                         Text("5. Copy the Client ID")
                     }
                     .font(.caption)

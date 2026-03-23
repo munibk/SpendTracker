@@ -32,13 +32,13 @@ struct SpendTrackerApp: App {
     // MARK: URL Handler
     // Handles:
     //   spendtracker://import?sms=<encoded>   ← Shortcuts SMS
-    //   com.yourname.spendtracker:/oauth2callback?code=<code> ← Gmail OAuth
+    //   com.munibk.spendtracker:/oauth2callback?code=<code> ← Gmail OAuth
     // ─────────────────────────────────────────────────────────
     private func handleIncomingURL(_ url: URL) {
         let scheme = url.scheme?.lowercased() ?? ""
 
         // Gmail OAuth callback
-        if scheme == "com.yourname.spendtracker" {
+        if scheme == "com.munibk.spendtracker" {
             gmail.handleCallback(url: url)
             return
         }
