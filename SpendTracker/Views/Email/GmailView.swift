@@ -9,7 +9,9 @@ struct GmailView: View {
     @State private var fetchCount       = 0
     @State private var showFetchResult  = false
     @State private var clientIDText     = ""
-    @State private var showClientIDSaved = false
+    @State private var showClientIDSaved  = false
+    @State private var showYearPicker      = false
+    @State private var selectedStartYear   = Calendar.current.component(.year, from: Date()) - 2
 
     var body: some View {
         NavigationView {
@@ -107,6 +109,7 @@ struct GmailView: View {
                 // ── Actions (when connected) ──────────────────
                 if gmail.isConnected {
                     Section(header: Text("Import")) {
+                        // Incremental fetch — only new emails since last run
                         Button(action: fetchEmails) {
                             HStack {
                                 if gmail.isFetching {
@@ -117,8 +120,8 @@ struct GmailView: View {
                                         .frame(width: 20)
                                 }
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(gmail.isFetching ? "Scanning..." : "Fetch Bank Emails")
-                                    Text("Last 2 months only")
+                                    Text(gmail.isFetching ? "Scanning emails..." : "Fetch New Emails")
+                                    Text(fetchSubtitle)
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 }
@@ -126,17 +129,53 @@ struct GmailView: View {
                         }
                         .disabled(gmail.isFetching)
 
+                        // Live progress bar
+                        if gmail.isFetching && gmail.totalEmailCount > 0 {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ProgressView(value: gmail.fetchProgress)
+                                    .tint(Color(hex: "#6C63FF"))
+                                Text("\(gmail.processedEmailCount) of \(gmail.totalEmailCount) emails processed")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 2)
+                        }
+
+                        // Full re-scan from configured start year
                         Button(action: rescanAllEmails) {
                             HStack {
                                 Image(systemName: "arrow.clockwise.circle")
                                     .foregroundColor(.orange)
                                     .frame(width: 20)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text("Re-scan Last 2 Months")
-                                    Text("Clears cache and re-imports")
+                                    Text("Full Re-scan All History")
+                                    Text("Re-imports from \(gmail.configuredStartYear) onwards")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 }
+                            }
+                        }
+                        .disabled(gmail.isFetching)
+
+                        // Year picker for history start
+                        Button(action: {
+                            selectedStartYear = gmail.configuredStartYear
+                            showYearPicker    = true
+                        }) {
+                            HStack {
+                                Image(systemName: "calendar")
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 20)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("History Start Year")
+                                    Text("Currently: \(gmail.configuredStartYear)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
                             }
                         }
                         .disabled(gmail.isFetching)
@@ -210,6 +249,11 @@ struct GmailView: View {
             .sheet(isPresented: $showSetupGuide) {
                 GmailSetupGuideView()
             }
+            .sheet(isPresented: $showYearPicker) {
+                YearPickerSheet(selectedYear: $selectedStartYear) { year in
+                    gmail.configuredStartYear = year
+                }
+            }
             .alert("Fetch Complete",
                    isPresented: $showFetchResult) {
                 Button("OK", role: .cancel) {}
@@ -219,6 +263,16 @@ struct GmailView: View {
                      : "No new bank transactions found in Gmail.")
             }
         }
+    }
+
+    // Subtitle for Fetch button showing last fetch time or first-run hint
+    private var fetchSubtitle: String {
+        if let last = gmail.lastFetchDate {
+            let fmt = RelativeDateTimeFormatter()
+            fmt.unitsStyle = .short
+            return "Last fetched \(fmt.localizedString(for: last, relativeTo: Date()))"
+        }
+        return "First run — fetches from \(gmail.configuredStartYear) onwards"
     }
 
     // ── Connected View ────────────────────────────────────────
@@ -318,7 +372,10 @@ struct GmailView: View {
     private func rescanAllEmails() {
         gmail.resetProcessedEmails()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            fetchEmails()
+            gmail.fetchBankEmails(store: store, fullRescan: true) { count in
+                fetchCount      = count
+                showFetchResult = true
+            }
         }
     }
 
@@ -518,6 +575,61 @@ struct GmailSetupGuideView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Year Picker Sheet
+struct YearPickerSheet: View {
+    @Binding var selectedYear: Int
+    @Environment(\.dismiss) var dismiss
+    let onSave: (Int) -> Void
+
+    private let years: [Int] = {
+        let current = Calendar.current.component(.year, from: Date())
+        return Array(2015...current).reversed()
+    }()
+
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 24) {
+                Text("Choose how far back to scan your Gmail for bank transaction emails.")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+
+                Picker("Start Year", selection: $selectedYear) {
+                    ForEach(years, id: \.self) { year in
+                        Text(String(year)).tag(year)
+                    }
+                }
+                .pickerStyle(.wheel)
+                .frame(height: 180)
+
+                Text("Emails from January \(selectedYear) onwards will be scanned on Full Re-scan.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+
+                Spacer()
+            }
+            .padding(.top, 24)
+            .navigationTitle("History Start Year")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") {
+                        onSave(selectedYear)
+                        dismiss()
+                    }
+                    .fontWeight(.semibold)
                 }
             }
         }

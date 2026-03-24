@@ -60,14 +60,17 @@ class SMSParserService {
     // MARK: - Card Type Detection
     func detectCardType(body: String) -> CardType {
         let b = body.lowercased()
-        if b.contains("credit card") || b.contains("cc ") ||
+        // NOTE: Intentionally avoid broad substrings like "cc " or "dc " because
+        // they match common abbreviations in bank SMS (e.g. "acc " for account).
+        if b.contains("credit card") ||
            b.contains("credit card no") || b.contains("cc no") ||
-           b.contains("credit card xx") || b.contains("credit card ending") {
+           b.contains("credit card xx") || b.contains("credit card ending") ||
+           b.contains("cc bill") || b.contains("cc payment") || b.contains("cc outstanding") {
             return .credit
         }
-        if b.contains("debit card") || b.contains("dc ") ||
+        if b.contains("debit card") ||
            b.contains("debit card no") || b.contains("pos purchase") ||
-           b.contains("pos debit") {
+           b.contains("pos debit") || b.contains("card swipe") {
             return .debit
         }
         return .none

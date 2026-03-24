@@ -23,7 +23,10 @@ class GmailService: ObservableObject {
     @Published var isFetching:    Bool   = false
     @Published var fetchStatus:   String = "Not connected"
     @Published var lastFetchDate: Date?  = nil
-    @Published var importedCount: Int    = 0
+    @Published var importedCount: Int       = 0
+    @Published var fetchProgress: Double    = 0      // 0.0 – 1.0
+    @Published var totalEmailCount: Int     = 0
+    @Published var processedEmailCount: Int = 0
 
     private var accessToken: String? {
         get { UserDefaults.standard.string(forKey: "gmail_access_token") }
@@ -41,6 +44,37 @@ class GmailService: ObservableObject {
     private init() {
         isConnected = accessToken != nil && refreshToken != nil
         userEmail   = UserDefaults.standard.string(forKey: "gmail_user_email") ?? ""
+        // Restore "last fetched" display from persisted epoch
+        let epoch = UserDefaults.standard.double(forKey: "gmail_incremental_after")
+        if epoch > 0 { lastFetchDate = Date(timeIntervalSince1970: epoch) }
+    }
+
+    // Start year for full-history scan (user-configurable, defaults to 2 years ago)
+    var configuredStartYear: Int {
+        get {
+            let y = UserDefaults.standard.integer(forKey: "gmail_start_year")
+            return y > 2015 ? y : Calendar.current.component(.year, from: Date()) - 2
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "gmail_start_year") }
+    }
+
+    // Epoch seconds of last successful fetch (0 = never fetched)
+    private var incrementalAfterEpoch: TimeInterval {
+        get { UserDefaults.standard.double(forKey: "gmail_incremental_after") }
+        set { UserDefaults.standard.set(newValue, forKey: "gmail_incremental_after") }
+    }
+
+    // Gmail `after:` query — incremental by default, full rescan on first run or user request
+    private func buildQuery(fullRescan: Bool = false) -> String {
+        let base = "(" + bankQueries.joined(separator: " OR ") + ")"
+        if fullRescan || incrementalAfterEpoch == 0 {
+            return "\(base) after:\(configuredStartYear)/01/01"
+        }
+        let date = Date(timeIntervalSince1970: incrementalAfterEpoch)
+        let fmt  = DateFormatter()
+        fmt.dateFormat = "yyyy/MM/dd"
+        fmt.timeZone   = TimeZone(identifier: "UTC")
+        return "\(base) after:\(fmt.string(from: date))"
     }
 
     // ── Client ID management ──────────────────────────────
@@ -205,7 +239,7 @@ class GmailService: ObservableObject {
         "subject:INR",
     ]
 
-    func fetchBankEmails(store: TransactionStore, completion: @escaping (Int) -> Void) {
+    func fetchBankEmails(store: TransactionStore, fullRescan: Bool = false, completion: @escaping (Int) -> Void) {
         guard isConnected else {
             DispatchQueue.main.async { self.fetchStatus = "Not connected to Gmail" }
             completion(0); return
@@ -225,9 +259,9 @@ class GmailService: ObservableObject {
                 completion(0); return
             }
 
-            // Fetch all pages — Gmail returns up to 500 per page,
-            // nextPageToken signals more results exist.
-            let query = "(" + self.bankQueries.joined(separator: " OR ") + ") newer_than:62d"
+            // Paginate through all matching emails (no fixed time limit).
+            // Incremental: uses `after:` date from last fetch. Full rescan: uses configuredStartYear.
+            let query = self.buildQuery(fullRescan: fullRescan)
             self.fetchAllMessageIDs(query: query, token: token) { [weak self] messages in
                 guard let self else { return }
                 if messages.isEmpty {
@@ -238,7 +272,10 @@ class GmailService: ObservableObject {
                     completion(0); return
                 }
                 DispatchQueue.main.async {
-                    self.fetchStatus = "Found \(messages.count) emails, parsing..."
+                    self.totalEmailCount     = messages.count
+                    self.processedEmailCount = 0
+                    self.fetchProgress       = 0
+                    self.fetchStatus = "Found \(messages.count) emails, processing..."
                 }
                 self.processMessages(messages: messages, token: token,
                                      store: store, completion: completion)
@@ -283,81 +320,123 @@ class GmailService: ObservableObject {
         }.resume()
     }
 
-    // Re-scan: clear processed cache
+    // Full re-scan: clears processed-ID cache and resets incremental epoch
     func resetProcessedEmails() {
         let defaults = UserDefaults.standard
         for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("gmail_processed_") {
             defaults.removeObject(forKey: key)
         }
-        DispatchQueue.main.async { self.fetchStatus = "Cache cleared — tap Fetch to reimport" }
+        incrementalAfterEpoch = 0   // forces next fetch to start from configuredStartYear
+        DispatchQueue.main.async {
+            self.fetchProgress       = 0
+            self.processedEmailCount = 0
+            self.totalEmailCount     = 0
+            self.fetchStatus         = "Cache cleared — tap Fetch to re-import all history"
+        }
     }
 
     // ─────────────────────────────────────────────────────
     // MARK: Process Messages
+    // Fetches email bodies in batches of 5 concurrent requests to avoid
+    // Gmail API rate limits while keeping processing fast.
+    // Progress is reported live via @Published properties.
     // ─────────────────────────────────────────────────────
     private func processMessages(messages: [[String: Any]], token: String,
                                  store: TransactionStore, completion: @escaping (Int) -> Void) {
-        let group   = DispatchGroup()
+        let total   = messages.count
         var count   = 0
-        var skipped = 0
+        var done    = 0
         let lock    = NSLock()
+        let group   = DispatchGroup()
         let parser  = EmailParserService.shared
 
-        for message in messages {
-            guard let msgID = message["id"] as? String else { continue }
+        // Semaphore caps simultaneous in-flight requests at 5.
+        // Must be waited on from a background thread (not main).
+        let semaphore = DispatchSemaphore(value: 5)
 
-            let processedKey = "gmail_processed_\(msgID)"
-            if UserDefaults.standard.bool(forKey: processedKey) {
-                lock.lock(); skipped += 1; lock.unlock()
-                continue
-            }
-
-            group.enter()
-            let url = URL(string: "\(gmailAPI)/users/me/messages/\(msgID)?format=full")!
-            var req = URLRequest(url: url)
-            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-
-            URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
-                defer { group.leave() }
-                guard let self, let data,
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-                else { return }
-
-                let body    = self.extractEmailContent(from: json)
-                let sender  = self.extractSender(from: json)
-                let subject = self.extractSubject(from: json)
-                let dateMs  = json["internalDate"] as? String ?? "0"
-                let date    = Date(timeIntervalSince1970: (Double(dateMs) ?? 0) / 1000)
-                let full    = subject + "\n" + body
-
-                // Mark as processed regardless of parse result.
-                // Non-transaction emails that matched the query (e.g. account summaries)
-                // would otherwise be retried on every fetch and keep count at 0.
-                // The user can tap "Re-scan" to clear the cache and retry everything.
-                UserDefaults.standard.set(true, forKey: processedKey)
-
-                // parseAll handles both single and multi-transaction emails
-                let txns = parser.parseAll(emailBody: full, sender: sender, date: date)
-                if !txns.isEmpty {
-                    DispatchQueue.main.async { txns.forEach { store.addTransaction($0) } }
-                    lock.lock(); count += txns.count; lock.unlock()
-                }
-            }.resume()
-        }
-
-        group.notify(queue: .main) { [weak self] in
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            self.isFetching    = false
-            self.lastFetchDate = Date()
-            self.importedCount += count
-            if count > 0 {
-                self.fetchStatus = "✅ Imported \(count) new transactions from Gmail"
-            } else if skipped == messages.count {
-                self.fetchStatus = "✅ All \(skipped) emails already imported — tap Re-scan to force re-import"
-            } else {
-                self.fetchStatus = "✅ Checked \(messages.count) emails — no transaction emails found"
+
+            for message in messages {
+                guard let msgID = message["id"] as? String else { continue }
+
+                // Skip already-processed emails without a network call
+                let processedKey = "gmail_processed_\(msgID)"
+                if UserDefaults.standard.bool(forKey: processedKey) {
+                    lock.lock()
+                    done += 1
+                    let d = done
+                    lock.unlock()
+                    DispatchQueue.main.async {
+                        self.processedEmailCount = d
+                        self.fetchProgress       = Double(d) / Double(total)
+                        self.fetchStatus         = "Processing \(d) of \(total)..."
+                    }
+                    continue
+                }
+
+                semaphore.wait()   // block until a slot is free (max 5 concurrent)
+                group.enter()
+
+                let url = URL(string: "\(self.gmailAPI)/users/me/messages/\(msgID)?format=full")!
+                var req = URLRequest(url: url)
+                req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+                URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
+                    defer {
+                        group.leave()
+                        semaphore.signal()
+                    }
+                    guard let self, let data,
+                          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                    else { return }
+
+                    let body    = self.extractEmailContent(from: json)
+                    let sender  = self.extractSender(from: json)
+                    let subject = self.extractSubject(from: json)
+                    let dateMs  = json["internalDate"] as? String ?? "0"
+                    let date    = Date(timeIntervalSince1970: (Double(dateMs) ?? 0) / 1000)
+                    let full    = subject + "\n" + body
+
+                    // Mark processed regardless of parse result so non-transaction
+                    // emails (e.g. account summaries) aren't retried every time.
+                    UserDefaults.standard.set(true, forKey: processedKey)
+
+                    let txns = parser.parseAll(emailBody: full, sender: sender, date: date)
+                    if !txns.isEmpty {
+                        DispatchQueue.main.async { txns.forEach { store.addTransaction($0) } }
+                        lock.lock(); count += txns.count; lock.unlock()
+                    }
+
+                    lock.lock()
+                    done += 1
+                    let d = done
+                    lock.unlock()
+                    DispatchQueue.main.async {
+                        self.processedEmailCount = d
+                        self.fetchProgress       = Double(d) / Double(total)
+                        self.fetchStatus         = "Processing \(d) of \(total)..."
+                    }
+                }.resume()
             }
-            completion(count)
+
+            group.notify(queue: .main) { [weak self] in
+                guard let self else { return }
+                self.isFetching          = false
+                self.fetchProgress       = 1.0
+                self.lastFetchDate       = Date()
+                self.importedCount      += count
+                // Persist for next incremental fetch
+                self.incrementalAfterEpoch = Date().timeIntervalSince1970
+                if count > 0 {
+                    self.fetchStatus = "✅ Imported \(count) new transactions from Gmail"
+                } else if done == total {
+                    self.fetchStatus = "✅ All \(total) emails already processed — use Full Re-scan to retry"
+                } else {
+                    self.fetchStatus = "✅ Checked \(total) emails — no transaction emails found"
+                }
+                completion(count)
+            }
         }
     }
 
