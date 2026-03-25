@@ -217,6 +217,8 @@ class GmailService: ObservableObject {
         "from:credit_cards@icicibank.com",
         "from:autoemail@icicibank.com",
         "from:donotreply@icicibank.com",
+        "from:alerts@icicibank.com",
+        "from:noreply@icicibank.com",
         "from:sbiatm@sbi.co.in",
         "from:noreply@sbi.co.in",
         "from:alerts@axisbank.com",

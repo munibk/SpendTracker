@@ -22,6 +22,35 @@ class CategoryService {
     }
 
     // ─────────────────────────────────────────────────────────
+    // MARK: Frequency Learning
+    // Tracks merchant → category assignment counts.
+    // Built automatically whenever the user corrects a category.
+    // Each correction gives a +4 score boost per occurrence in future parses.
+    // ─────────────────────────────────────────────────────────
+    private var frequencyMap: [String: [String: Int]] {
+        get {
+            guard let data    = UserDefaults.standard.data(forKey: "categoryFrequency"),
+                  let decoded = try? JSONDecoder().decode([String: [String: Int]].self, from: data)
+            else { return [:] }
+            return decoded
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(data, forKey: "categoryFrequency")
+            }
+        }
+    }
+
+    func learnCategory(merchant: String, category: SpendCategory) {
+        var map    = frequencyMap
+        let key    = merchant.lowercased()
+        var counts = map[key] ?? [:]
+        counts[category.rawValue, default: 0] += 1
+        map[key] = counts
+        frequencyMap = map
+    }
+
+    // ─────────────────────────────────────────────────────────
     // MARK: Main Categorize
     // ─────────────────────────────────────────────────────────
     func categorize(
@@ -36,8 +65,14 @@ class CategoryService {
         let ml = merchant.lowercased()
         let bl = body.lowercased()
 
-        // 1. User override (highest priority)
+        // 1. Exact user override (highest priority)
         if let override = userOverrides[ml] { return override }
+
+        // 1a. Partial/fuzzy override match
+        // e.g. override for "amazon pay" also applies to "Amazon Pay In Grocery"
+        for (key, cat) in userOverrides where key.count >= 4 {
+            if ml.contains(key) || key.contains(ml) { return cat }
+        }
 
         // 1b. ACH bank-to-bank debit → EMI / loan repayment
         // Pattern: ACH-DR or NACH debit from one bank to another bank.
@@ -83,9 +118,9 @@ class CategoryService {
                         bl.contains("pos purchase") ||
                         bl.contains("online purchase")
 
-        // 5. Score categories
+        // 5. Score categories (threshold >= 2 to avoid 1-word false positives)
         let scored = scoreCategories(merchant: ml, body: bl, upiId: upiId)
-        if let best = scored.first, best.score > 0 { return best.category }
+        if let best = scored.first, best.score >= 2 { return best.category }
 
         // 6. Card transaction with no category match → shopping
         if isCardTxn { return .shopping }
@@ -138,6 +173,17 @@ class CategoryService {
             }
         }
 
+        // Frequency learning boost: past user corrections for this merchant
+        // Each time a user manually assigned a category, it earns +4 per correction.
+        let freq = frequencyMap[merchant]
+        if let freq {
+            for (catRaw, count) in freq {
+                if let cat = SpendCategory(rawValue: catRaw) {
+                    scores[cat, default: 0] += count * 4
+                }
+            }
+        }
+
         return scores
             .sorted { $0.value > $1.value }
             .map { CategoryScore(category: $0.key, score: $0.value) }
@@ -158,6 +204,7 @@ class CategoryService {
         var overrides = userOverrides
         overrides[merchant.lowercased()] = category
         userOverrides = overrides
+        learnCategory(merchant: merchant, category: category)  // persist frequency too
     }
 
     func removeOverride(merchant: String) {
