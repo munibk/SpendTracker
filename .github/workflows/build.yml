@@ -58,13 +58,11 @@ jobs:
 
       - name: Summary
         run: |
-          REPO="${{ github.server_url }}/${{ github.repository }}"
-          RUN_ID="${{ github.run_id }}"
-          ARTIFACT_URL="${REPO}/actions/runs/${RUN_ID}#artifacts"
+          ARTIFACT_URL="${{ steps.upload_ipa.outputs.artifact-url }}"
           IPA_SIZE=$(du -sh $RUNNER_TEMP/SpendTracker.ipa | cut -f1)
           BRANCH="${{ github.ref_name }}"
-          COMMIT="${{ github.sha }}"
-          SHORT_SHA="${COMMIT:0:7}"
+          SHORT_SHA="${{ github.sha }}"
+          SHORT_SHA="${SHORT_SHA:0:7}"
 
           echo "## ✅ Build Successful" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -75,6 +73,6 @@ jobs:
           echo "| IPA Size | ${IPA_SIZE} |" >> $GITHUB_STEP_SUMMARY
           echo "| Expires | 7 days |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📦 [Download SpendTracker.ipa](${ARTIFACT_URL})" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 [Click here to download SpendTracker.ipa](${ARTIFACT_URL})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> Install using **AltStore** or **Sideloadly**" >> $GITHUB_STEP_SUMMARY
+          echo "> **Note:** You must be logged in to GitHub to download. Install using **AltStore** or **Sideloadly**." >> $GITHUB_STEP_SUMMARY
