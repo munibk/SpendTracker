@@ -27,6 +27,7 @@
 		AA000018 /* GmailService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000018; };
 		AA000019 /* EmailParserService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000019; };
 		AA000020 /* GmailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000020; };
+		AA000021 /* CreditCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000021; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -50,6 +51,7 @@
 		BA000018 /* GmailService.swift */        = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GmailService.swift; sourceTree = "<group>"; };
 		BA000019 /* EmailParserService.swift */  = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailParserService.swift; sourceTree = "<group>"; };
 		BA000020 /* GmailView.swift */           = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GmailView.swift; sourceTree = "<group>"; };
+		BA000021 /* CreditCardView.swift */      = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreditCardView.swift; sourceTree = "<group>"; };
 		BA000099 /* SpendTracker.app */         = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpendTracker.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BA000100 /* Info.plist */               = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		BA000101 /* SpendTracker.entitlements */= {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SpendTracker.entitlements; sourceTree = "<group>"; };
@@ -129,6 +131,15 @@
 			path = Email;
 			sourceTree = "<group>";
 		};
+		CREDITCARDGROUP = {
+			isa = PBXGroup;
+			children = (
+				BA000021,
+			);
+			name = CreditCard;
+			path = CreditCard;
+			sourceTree = "<group>";
+		};
 		VIEWSGROUP = {
 			isa = PBXGroup;
 			children = (
@@ -136,6 +147,7 @@
 				DASHBOARDGROUP,
 				TRANSACTIONSGROUP,
 				CHARTSGROUP,
+				CREDITCARDGROUP,
 				REPORTSGROUP,
 				SETTINGSGROUP,
 				EMAILGROUP,
@@ -281,6 +293,7 @@
 				AA000018,
 				AA000019,
 				AA000020,
+				AA000021,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

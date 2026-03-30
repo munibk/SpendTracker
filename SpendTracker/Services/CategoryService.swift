@@ -94,9 +94,12 @@ class CategoryService {
                     upiId != nil
 
         if isUPI {
-            // Even if UPI, try to find a better category from merchant/body
+            // Even if UPI, try to find a better category from merchant/body.
+            // Threshold lowered to 2: emails like Axis Bank use UPI/P2M/.../FLIPKART
+            // with no @VPA, so the VPA +5 boost is unavailable — body-only match (+1
+            // per keyword) needs a lower bar to win over the .upi fallback.
             let scored = scoreCategories(merchant: ml, body: bl, upiId: upiId)
-            if let best = scored.first, best.score >= 3 {
+            if let best = scored.first, best.score >= 2 {
                 return best.category
             }
             return .upi
