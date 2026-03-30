@@ -49,6 +49,7 @@ jobs:
 
       # ── Upload IPA ─────────────────────────────────────────────
       - name: Upload IPA
+        id: upload_ipa
         uses: actions/upload-artifact@v4
         with:
           name: SpendTracker-IPA
@@ -57,5 +58,23 @@ jobs:
 
       - name: Summary
         run: |
+          REPO="${{ github.server_url }}/${{ github.repository }}"
+          RUN_ID="${{ github.run_id }}"
+          ARTIFACT_URL="${REPO}/actions/runs/${RUN_ID}#artifacts"
+          IPA_SIZE=$(du -sh $RUNNER_TEMP/SpendTracker.ipa | cut -f1)
+          BRANCH="${{ github.ref_name }}"
+          COMMIT="${{ github.sha }}"
+          SHORT_SHA="${COMMIT:0:7}"
+
           echo "## ✅ Build Successful" >> $GITHUB_STEP_SUMMARY
-          echo "Download SpendTracker.ipa from Artifacts and install via AltStore or Sideloadly." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`${BRANCH}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${SHORT_SHA}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| IPA Size | ${IPA_SIZE} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Expires | 7 days |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 [Download SpendTracker.ipa](${ARTIFACT_URL})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> Install using **AltStore** or **Sideloadly**" >> $GITHUB_STEP_SUMMARY
