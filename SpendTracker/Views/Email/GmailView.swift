@@ -306,12 +306,37 @@ struct GmailView: View {
                     }
                 }
 
-                // ── Connection Status ─────────────────────────
+                // ── Connection Status & OAuth Actions ─────────
+                if emailMethod == "oauth" {
                 Section {
                     if gmail.isConnected {
-                        connectedView
+                        HStack(spacing: 14) {
+                            ZStack {
+                                Circle().fill(Color.green.opacity(0.15)).frame(width: 44, height: 44)
+                                Image(systemName: "person.circle.fill")
+                                    .foregroundColor(.green).font(.title2)
+                            }
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Google Account Connected")
+                                    .font(.subheadline).fontWeight(.semibold)
+                                Text(gmail.userEmail)
+                                    .font(.caption).foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 6)
                     } else {
-                        notConnectedView
+                        Button(action: { gmail.startLogin() }) {
+                            HStack {
+                                Image(systemName: "person.circle.fill")
+                                    .foregroundColor(.blue).frame(width: 20)
+                                Text("Sign in with Google").fontWeight(.semibold)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(10)
+                            .background(Color.blue.opacity(0.1))
+                            .cornerRadius(10)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
 
@@ -428,7 +453,12 @@ struct GmailView: View {
                         Text("Automatically detects emails from:")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        bankList
+                        ForEach(["HDFC Bank", "ICICI Bank", "SBI", "Axis Bank",
+                                 "Kotak Bank", "Yes Bank", "IndusInd Bank"], id: \.self) { bank in
+                            Text(bank)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
 
                     Section {
@@ -440,7 +470,7 @@ struct GmailView: View {
                     }
                 } // end OAuth `if gmail.isConnected`
 
-                } // end `} else {` (OAuth method)
+                } // end `if emailMethod == "oauth"`
 
                 // ── Setup Guide (always visible) ──────────────
                 Section {

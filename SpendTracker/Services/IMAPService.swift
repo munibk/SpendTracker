@@ -344,7 +344,7 @@ private class IMAPSession {
         let sem = DispatchSemaphore(value: 0)
         var connErr: String?
 
-        connection.stateUpdateHandler = { [weak self] state in
+        connection.stateUpdateHandler = { state in
             switch state {
             case .ready:
                 sem.signal()
