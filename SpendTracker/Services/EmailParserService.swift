@@ -119,6 +119,20 @@ class EmailParserService {
                         "inr","rs.","rs ","₹","used for","amount"]
         guard txnWords.contains(where: { b.contains($0) }) else { return nil }
 
+        // ── Reject CC payment-received confirmation emails ────────────────
+        // e.g. subject "Payment received on your ICICI Bank Credit Card"
+        // From the user's perspective these are NOT income — they are outgoing
+        // payments already captured as a debit from the savings-account SMS/email.
+        // CCBillService processes these separately to update bill status.
+        let isCCPaymentConfirmation =
+            b.contains("credit card") &&
+            (b.contains("payment received on your") ||
+             b.contains("payment of") && b.contains("has been received") ||
+             b.contains("we have received your payment") ||
+             b.contains("payment towards your credit card") ||
+             b.contains("payment credited to your credit card"))
+        if isCCPaymentConfirmation { return nil }
+
         guard let amount = extractAmount(body: cleaned) else { return nil }
         guard let type   = extractType(body: cleaned)   else { return nil }
 

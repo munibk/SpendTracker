@@ -84,22 +84,40 @@ class CategoryService {
         if isACH { return .emi }
 
         // 2. UPI check FIRST — before ATM
-        // If body mentions UPI/IMPS/NEFT with a reference number
-        // it is a UPI transfer NOT ATM withdrawal
+        // Covers all major Indian bank UPI alert patterns:
+        //   HDFC  : "debited by upi; ref no"
+        //   ICICI : "upi/p2m/123456/flipkart"
+        //   SBI   : "transferred via upi"
+        //   Axis  : "upi txn", "upi transaction"
+        //   Generic: "sent via upi", "upi transfer", @vpa present
         let isUPI = bl.contains("upi/") ||
                     bl.contains("upi-") ||
                     bl.contains("upi ref") ||
                     bl.contains("upi id") ||
+                    bl.contains("by upi") ||
+                    bl.contains("via upi") ||
+                    bl.contains("through upi") ||
+                    bl.contains("upi txn") ||
+                    bl.contains("upi transfer") ||
+                    bl.contains("upi transaction") ||
+                    bl.contains("sent to upi") ||
+                    bl.contains("; upi") ||
+                    bl.contains("trf/upi") ||
+                    bl.contains("neft/") ||
+                    bl.contains("imps/") ||
                     (bl.contains("upi") && (bl.contains("p2a") || bl.contains("p2m") || bl.contains("p2p"))) ||
                     upiId != nil
 
         if isUPI {
-            // Even if UPI, try to find a better category from merchant/body.
-            // Threshold lowered to 2: emails like Axis Bank use UPI/P2M/.../FLIPKART
-            // with no @VPA, so the VPA +5 boost is unavailable — body-only match (+1
-            // per keyword) needs a lower bar to win over the .upi fallback.
-            let scored = scoreCategories(merchant: ml, body: bl, upiId: upiId)
-            if let best = scored.first, best.score >= 2 {
+            // For UPI flows, only override with a specific merchant category when
+            // there is a STRONG match — score >= 4 requires at least one merchant-level
+            // keyword hit (worth +3). This prevents body-only investment keyword noise
+            // (e.g. "lic", "sip" appearing in SMS footers) from falsely winning.
+            // Investment is excluded entirely: genuine SIP/MF payments should reach
+            // Groww/Zerodha via VPA boost (+5) which easily clears the 4-point bar.
+            let scored = scoreCategories(merchant: ml, body: bl, upiId: upiId,
+                                         exclude: [.investment])
+            if let best = scored.first, best.score >= 4 {
                 return best.category
             }
             return .upi
@@ -147,12 +165,13 @@ class CategoryService {
     private func scoreCategories(
         merchant: String,
         body:     String,
-        upiId:    String?
+        upiId:    String?,
+        exclude:  Set<SpendCategory> = []
     ) -> [CategoryScore] {
         var scores: [SpendCategory: Int] = [:]
 
         for cat in SpendCategory.allCases
-        where cat != .others && cat != .salary && cat != .upi && cat != .atm {
+        where cat != .others && cat != .salary && cat != .upi && cat != .atm && !exclude.contains(cat) {
             var score = 0
             for kw in cat.keywords {
                 if merchant.contains(kw) { score += 3 }
@@ -200,6 +219,10 @@ class CategoryService {
         // UPI / IMPS / NEFT credit (received money from someone) → UPI Transfer, not Others
         let isUPICredit = bl.contains("upi/") || bl.contains("upi-") ||
                           bl.contains("upi ref") || bl.contains("upi id") ||
+                          bl.contains("by upi") || bl.contains("via upi") ||
+                          bl.contains("through upi") || bl.contains("upi txn") ||
+                          bl.contains("upi transfer") || bl.contains("upi transaction") ||
+                          bl.contains("neft/") || bl.contains("imps/") ||
                           bl.contains("upi credited") || bl.contains("received via upi") ||
                           bl.contains("imps") || bl.contains("neft") || bl.contains("rtgs") ||
                           (bl.contains("upi") && (bl.contains("p2a") || bl.contains("p2m") || bl.contains("p2p")))

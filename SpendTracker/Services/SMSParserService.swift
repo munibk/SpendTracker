@@ -26,6 +26,17 @@ class SMSParserService {
         ]
         for kw in declineWords { if b.contains(kw) { return nil } }
 
+        // Skip CC payment-received confirmation SMS — not income from user's perspective.
+        // e.g. "Payment of Rs.5000 received for your ICICI CC xx1234. Outstanding: Rs.0."
+        // The actual debit is captured separately from the savings/current account SMS.
+        let isCCPaymentConfirmation =
+            b.contains("credit card") &&
+            (b.contains("payment received for your") ||
+             b.contains("payment of") && b.contains("received for your cc") ||
+             b.contains("payment received for cc") ||
+             b.contains("payment received on your credit card"))
+        if isCCPaymentConfirmation { return nil }
+
         guard let type   = extractTransactionType(body: smsBody) else { return nil }
         guard let amount = extractAmount(body: smsBody)           else { return nil }
 
