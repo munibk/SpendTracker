@@ -516,7 +516,7 @@ class EmailParserService {
             }
         }
         // Not a known bank — strip "ACH-DR", "NACH", "TP", trailing digits
-        var cleaned = raw
+        let cleaned = raw
             .replacingOccurrences(of: #"ACH[\-]?DR[\-]?TP\s*"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"NACH\s*"#, with: "", options: [.regularExpression, .caseInsensitive])
             .replacingOccurrences(of: #"ACH\s*"#, with: "", options: [.regularExpression, .caseInsensitive])

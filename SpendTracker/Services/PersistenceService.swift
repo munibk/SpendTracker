@@ -127,10 +127,13 @@ class TransactionStore: ObservableObject {
         return result
     }
 
-    // Total spend excludes EMI — EMI is shown separately on the dashboard
+    // Total spend = actual consumption debits only.
+    // Excludes: EMI (shown separately), Investment (SIPs/savings), Salary (rare debit).
+    private static let nonSpendCategories: Set<SpendCategory> = [.emi, .investment, .salary]
+
     func totalSpend(for month: Date) -> Double {
         transactions(for: month)
-            .filter { $0.type == .debit && $0.category != .emi }
+            .filter { $0.type == .debit && !Self.nonSpendCategories.contains($0.category) }
             .reduce(0) { $0 + $1.amount }
     }
 
