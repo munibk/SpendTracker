@@ -4,6 +4,8 @@ import SwiftUI
 struct GmailView: View {
     @EnvironmentObject var store:  TransactionStore
     @StateObject private var gmail = GmailService.shared
+    @StateObject private var imap  = IMAPService.shared
+    @AppStorage("email_method") private var emailMethod = "imap"   // "imap" | "oauth"
     @State private var showManualImport = false
     @State private var showSetupGuide   = false
     @State private var fetchCount       = 0
@@ -13,12 +15,219 @@ struct GmailView: View {
     @State private var showYearPicker      = false
     @State private var selectedStartYear   = Calendar.current.component(.year, from: Date()) - 2
 
+    // IMAP-specific state
+    @State private var imapEmail       = ""
+    @State private var imapPassword    = ""
+    @State private var imapVerifying   = false
+    @State private var imapVerifyMsg   = ""
+    @State private var showIMAPPassword = false
+
     var body: some View {
         NavigationView {
             List {
 
-                // ── Client ID Setup ───────────────────────────
-                Section(header: Text("Google Client ID")) {
+                // ── Method Picker ─────────────────────────────
+                Section {
+                    Picker("Connection Method", selection: $emailMethod) {
+                        Label("App Password", systemImage: "key.fill")
+                            .tag("imap")
+                        Label("Google OAuth", systemImage: "g.circle.fill")
+                            .tag("oauth")
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.vertical, 4)
+
+                    if emailMethod == "imap" {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.seal.fill").foregroundColor(.green)
+                            Text("Recommended — works with any shared IPA, no Google Cloud setup needed")
+                                .font(.caption2).foregroundColor(.secondary)
+                        }
+                    } else {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle").foregroundColor(.orange)
+                            Text("Advanced — requires a Google Cloud project and Client ID")
+                                .font(.caption2).foregroundColor(.secondary)
+                        }
+                    }
+                }
+
+                // ─────────────────────────────────────────────
+                // MARK: IMAP / App Password Method
+                // ─────────────────────────────────────────────
+                if emailMethod == "imap" {
+
+                    if imap.isConnected {
+                        // ── Connected ────────────────────────
+                        Section {
+                            HStack(spacing: 14) {
+                                ZStack {
+                                    Circle().fill(Color.green.opacity(0.15)).frame(width: 44, height: 44)
+                                    Image(systemName: "key.fill").foregroundColor(.green).font(.title2)
+                                }
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("App Password Connected").font(.subheadline).fontWeight(.semibold)
+                                    Text(imap.userEmail).font(.caption).foregroundColor(.secondary)
+                                }
+                            }
+                            .padding(.vertical, 6)
+                        }
+
+                        Section(header: Text("Import")) {
+                            Button(action: imapFetchEmails) {
+                                HStack {
+                                    if imap.isFetching {
+                                        ProgressView().scaleEffect(0.8).frame(width: 20)
+                                    } else {
+                                        Image(systemName: "envelope.badge")
+                                            .foregroundColor(Color(hex: "#6C63FF")).frame(width: 20)
+                                    }
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(imap.isFetching ? "Scanning emails…" : "Fetch New Emails")
+                                        Text(imapFetchSubtitle).font(.caption2).foregroundColor(.secondary)
+                                    }
+                                }
+                            }
+                            .disabled(imap.isFetching)
+
+                            if imap.isFetching && imap.totalEmailCount > 0 {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    ProgressView(value: imap.fetchProgress).tint(Color(hex: "#6C63FF"))
+                                    Text("\(imap.processedEmailCount) of \(imap.totalEmailCount) emails processed")
+                                        .font(.caption2).foregroundColor(.secondary)
+                                }
+                                .padding(.vertical, 2)
+                            }
+
+                            Button(action: imapRescanAll) {
+                                HStack {
+                                    Image(systemName: "arrow.clockwise.circle").foregroundColor(.orange).frame(width: 20)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Full Re-scan All History")
+                                        Text("Re-imports from \(imap.configuredStartYear) onwards")
+                                            .font(.caption2).foregroundColor(.secondary)
+                                    }
+                                }
+                            }
+                            .disabled(imap.isFetching)
+
+                            Button(action: {
+                                selectedStartYear = imap.configuredStartYear
+                                showYearPicker    = true
+                            }) {
+                                HStack {
+                                    Image(systemName: "calendar").foregroundColor(.secondary).frame(width: 20)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("History Start Year")
+                                        Text("Currently: \(imap.configuredStartYear)").font(.caption2).foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right").font(.caption).foregroundColor(.secondary)
+                                }
+                            }
+                            .disabled(imap.isFetching)
+
+                            Button(action: { showManualImport = true }) {
+                                Label("Paste Email Manually", systemImage: "doc.text")
+                            }
+                        }
+
+                        Section(header: Text("Status")) {
+                            HStack {
+                                Text("Status"); Spacer()
+                                Text(imap.fetchStatus).font(.caption).foregroundColor(.secondary)
+                                    .lineLimit(2).multilineTextAlignment(.trailing)
+                            }
+                            if let last = imap.lastFetchDate {
+                                HStack {
+                                    Text("Last Fetched"); Spacer()
+                                    Text(last.formatted(.relative(presentation: .numeric)))
+                                        .font(.caption).foregroundColor(.secondary)
+                                }
+                            }
+                            HStack {
+                                Text("Total Imported"); Spacer()
+                                Text("\(imap.importedCount)").foregroundColor(.secondary)
+                            }
+                        }
+
+                        Section {
+                            Button(role: .destructive, action: { imap.disconnect() }) {
+                                Label("Remove App Password", systemImage: "xmark.circle")
+                            }
+                        }
+
+                    } else {
+                        // ── Sign-in form ─────────────────────
+                        Section(header: Text("Gmail Account")) {
+                            TextField("your@gmail.com", text: $imapEmail)
+                                .keyboardType(.emailAddress)
+                                .autocapitalization(.none)
+                                .autocorrectionDisabled()
+
+                            HStack {
+                                Group {
+                                    if showIMAPPassword {
+                                        TextField("App Password (16 chars)", text: $imapPassword)
+                                    } else {
+                                        SecureField("App Password (16 chars)", text: $imapPassword)
+                                    }
+                                }
+                                .autocapitalization(.none)
+                                .autocorrectionDisabled()
+                                Button(action: { showIMAPPassword.toggle() }) {
+                                    Image(systemName: showIMAPPassword ? "eye.slash" : "eye")
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+
+                            if !imapVerifyMsg.isEmpty {
+                                HStack(spacing: 6) {
+                                    Image(systemName: imapVerifyMsg.contains("✅") ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                        .foregroundColor(imapVerifyMsg.contains("✅") ? .green : .red)
+                                    Text(imapVerifyMsg).font(.caption).foregroundColor(.secondary)
+                                }
+                            }
+
+                            Button(action: verifyAndConnectIMAP) {
+                                HStack {
+                                    if imapVerifying { ProgressView().scaleEffect(0.8) }
+                                    Text(imapVerifying ? "Verifying…" : "Verify & Connect")
+                                        .fontWeight(.semibold)
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .padding(10)
+                                .background(imapEmail.isEmpty || imapPassword.isEmpty
+                                            ? Color.gray : Color(hex: "#6C63FF"))
+                                .foregroundColor(.white)
+                                .cornerRadius(10)
+                            }
+                            .disabled(imapEmail.isEmpty || imapPassword.isEmpty || imapVerifying)
+                            .buttonStyle(.plain)
+                        }
+
+                        Section(header: Text("How to get an App Password")) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                stepRow(n: "1", text: "Go to myaccount.google.com")
+                                stepRow(n: "2", text: "Security → 2-Step Verification → App Passwords")
+                                stepRow(n: "3", text: "Select app: Mail  |  Select device: iPhone")
+                                stepRow(n: "4", text: "Copy the 16-character password shown")
+                                stepRow(n: "5", text: "Paste it above (spaces are ignored)")
+                                HStack(spacing: 6) {
+                                    Image(systemName: "lock.shield.fill").foregroundColor(Color(hex: "#2ECC71"))
+                                    Text("Stored securely in iOS Keychain — never leaves your device")
+                                        .font(.caption2).foregroundColor(.secondary)
+                                }
+                                .padding(.top, 4)
+                            }
+                            .padding(.vertical, 6)
+                        }
+                    }
+
+                // ─────────────────────────────────────────────
+                // MARK: OAuth Method (existing flow)
+                // ─────────────────────────────────────────────
+                } else {
                     if gmail.isConfigured {
                         HStack {
                             Image(systemName: "checkmark.circle.fill")
@@ -229,19 +438,21 @@ struct GmailView: View {
                                   systemImage: "xmark.circle")
                         }
                     }
-                }
+                } // end OAuth `if gmail.isConnected`
 
-                // ── Setup Guide ───────────────────────────────
+                } // end `} else {` (OAuth method)
+
+                // ── Setup Guide (always visible) ──────────────
                 Section {
                     Button(action: { showSetupGuide = true }) {
-                        Label("Gmail Setup Guide",
+                        Label(emailMethod == "imap" ? "App Password Help" : "Gmail Setup Guide",
                               systemImage: "questionmark.circle")
                             .foregroundColor(Color(hex: "#6C63FF"))
                     }
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Gmail Import")
+            .navigationTitle("Email Import")
             .navigationBarTitleDisplayMode(.large)
             .sheet(isPresented: $showManualImport) {
                 ManualEmailImportView()
@@ -249,9 +460,13 @@ struct GmailView: View {
             .sheet(isPresented: $showSetupGuide) {
                 GmailSetupGuideView()
             }
-            .sheet(isPresented: $showYearPicker) {
+            .sheet(isPresented: $showYearPicker) { [self] in
                 YearPickerSheet(selectedYear: $selectedStartYear) { year in
-                    gmail.configuredStartYear = year
+                    if emailMethod == "imap" {
+                        imap.configuredStartYear = year
+                    } else {
+                        gmail.configuredStartYear = year
+                    }
                 }
             }
             .alert("Fetch Complete",
@@ -265,7 +480,65 @@ struct GmailView: View {
         }
     }
 
-    // Subtitle for Fetch button showing last fetch time or first-run hint
+    // MARK: - IMAP Helpers
+
+    private var imapFetchSubtitle: String {
+        if let last = imap.lastFetchDate {
+            let fmt = RelativeDateTimeFormatter()
+            fmt.unitsStyle = .short
+            return "Last fetched \(fmt.localizedString(for: last, relativeTo: Date()))"
+        }
+        return "First run — fetches from \(imap.configuredStartYear) onwards"
+    }
+
+    private func verifyAndConnectIMAP() {
+        imapVerifying = true
+        imapVerifyMsg = ""
+        imap.testConnection(email: imapEmail, appPassword: imapPassword) { success, msg in
+            DispatchQueue.main.async {
+                self.imapVerifying = false
+                self.imapVerifyMsg = success ? "" : msg
+                if success {
+                    self.imap.saveCredentials(email: self.imapEmail,
+                                             appPassword: self.imapPassword)
+                    self.imapEmail    = ""
+                    self.imapPassword = ""
+                }
+            }
+        }
+    }
+
+    private func imapFetchEmails() {
+        imap.fetchBankEmails(store: store) { count in
+            fetchCount      = count
+            showFetchResult = true
+        }
+    }
+
+    private func imapRescanAll() {
+        imap.resetProcessedEmails()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            imap.fetchBankEmails(store: store, fullRescan: true) { count in
+                fetchCount      = count
+                showFetchResult = true
+            }
+        }
+    }
+
+    private func stepRow(n: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(n)
+                .font(.caption2).fontWeight(.bold)
+                .foregroundColor(.white)
+                .frame(width: 18, height: 18)
+                .background(Color(hex: "#6C63FF"))
+                .clipShape(Circle())
+            Text(text).font(.caption).foregroundColor(.secondary)
+        }
+    }
+
+    // MARK: - OAuth Helpers
+
     private var fetchSubtitle: String {
         if let last = gmail.lastFetchDate {
             let fmt = RelativeDateTimeFormatter()
@@ -275,91 +548,7 @@ struct GmailView: View {
         return "First run — fetches from \(gmail.configuredStartYear) onwards"
     }
 
-    // ── Connected View ────────────────────────────────────────
-    private var connectedView: some View {
-        HStack(spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(Color.green.opacity(0.15))
-                    .frame(width: 44, height: 44)
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
-                    .font(.title2)
-            }
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Gmail Connected")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                Text(gmail.userEmail)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-        }
-        .padding(.vertical, 6)
-    }
-
-    // ── Not Connected View ────────────────────────────────────
-    private var notConnectedView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "envelope.circle.fill")
-                .font(.system(size: 50))
-                .foregroundColor(Color(hex: "#6C63FF"))
-
-            VStack(spacing: 6) {
-                Text("Connect Gmail")
-                    .font(.headline)
-                Text("Automatically import bank transaction emails")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-
-            Button(action: { gmail.startLogin() }) {
-                HStack {
-                    Image(systemName: "envelope.fill")
-                    Text("Connect with Gmail")
-                        .fontWeight(.semibold)
-                }
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(Color(hex: "#6C63FF"))
-                .foregroundColor(.white)
-                .cornerRadius(12)
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 8)
-
-            Text("Only reads emails — never sends or modifies")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-        }
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity)
-    }
-
-    // ── Bank List ─────────────────────────────────────────────
-    private var bankList: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            let banks = [
-                ("ICICI Bank", "credit_cards@icicibank.com"),
-                ("Axis Bank",  "alerts@axis.bank.in"),
-            ]
-            ForEach(banks, id: \.0) { bank in
-                HStack {
-                    Text(bank.0)
-                        .font(.caption)
-                        .fontWeight(.medium)
-                    Spacer()
-                    Text(bank.1)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    // ── Fetch Emails ──────────────────────────────────────────
+    // ── OAuth Actions ─────────────────────────────────────────
     private func saveClientID() {
         gmail.saveClientID(clientIDText)
         showClientIDSaved = true
