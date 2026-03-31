@@ -197,6 +197,13 @@ class CategoryService {
         if bl.contains("salary") || bl.contains("payroll") { return .salary }
         if bl.contains("refund") || bl.contains("cashback") || bl.contains("reversal") { return .others }
         if bl.contains("mutual fund") || bl.contains("dividend") || bl.contains("fd maturity") { return .investment }
+        // UPI / IMPS / NEFT credit (received money from someone) → UPI Transfer, not Others
+        let isUPICredit = bl.contains("upi/") || bl.contains("upi-") ||
+                          bl.contains("upi ref") || bl.contains("upi id") ||
+                          bl.contains("upi credited") || bl.contains("received via upi") ||
+                          bl.contains("imps") || bl.contains("neft") || bl.contains("rtgs") ||
+                          (bl.contains("upi") && (bl.contains("p2a") || bl.contains("p2m") || bl.contains("p2p")))
+        if isUPICredit { return .upi }
         return .others
     }
 

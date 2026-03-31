@@ -239,6 +239,10 @@ class GmailService: ObservableObject {
         "subject:\"credit transaction alert\"",
         "subject:\"debit transaction alert\"",
         "subject:INR",
+        // CC statement & payment confirmation emails
+        "subject:\"credit card statement\"",
+        "subject:\"payment received on your\"",
+        "subject:\"payment received\" credit card",
     ]
 
     func fetchBankEmails(store: TransactionStore, fullRescan: Bool = false, completion: @escaping (Int) -> Void) {
@@ -409,6 +413,9 @@ class GmailService: ObservableObject {
                         DispatchQueue.main.async { txns.forEach { store.addTransaction($0) } }
                         lock.lock(); count += txns.count; lock.unlock()
                     }
+
+                    // Track CC bill statement and payment-confirmation emails
+                    CCBillService.shared.processEmail(subject: subject, body: body, date: date)
 
                     lock.lock()
                     done += 1
