@@ -34,6 +34,38 @@ struct CreditCardView: View {
         ccBillPayments.reduce(0) { $0 + $1.amount }
     }
 
+    // Spend grouped by bank name (lowercased) — used to enrich bill status cards
+    // when no statement email has been parsed yet.
+    private var spendByBankKey: [String: Double] {
+        var map: [String: Double] = [:]
+        for t in ccPurchases {
+            map[t.bankName.lowercased(), default: 0] += t.amount
+        }
+        return map
+    }
+
+    // ── Bill-service aggregates (source of truth for Outstanding / Paid) ───────
+    // When CCBillService has parsed a statement email, totalDue > 0 → use it.
+    // Otherwise fall back to transaction-based numbers so the UI is never blank.
+    private var hasBillServiceStatements: Bool {
+        billRecordsForDisplay.contains { $0.totalDue > 0 }
+    }
+    private var aggregateBillDue: Double {
+        billRecordsForDisplay.reduce(0) { $0 + $1.totalDue }
+    }
+    private var aggregateBillPaid: Double {
+        let s = billRecordsForDisplay.reduce(0) { $0 + $1.totalPaid }
+        // Fall back to savings-account debit transactions tagged .creditCard
+        return s > 0 ? s : totalBillPaid
+    }
+    private var aggregateOutstanding: Double {
+        if hasBillServiceStatements {
+            return billRecordsForDisplay.reduce(0) { $0 + $1.outstanding }
+        }
+        // No statement yet: total CC spend this month will become the next bill
+        return totalCCSpend
+    }
+
     // Per-card spending breakdown grouped by bank + last4
     private var perCardBreakdown: [(label: String, amount: Double, count: Int)] {
         var map: [String: (amount: Double, count: Int)] = [:]
@@ -150,15 +182,15 @@ struct CreditCardView: View {
             HStack(spacing: 12) {
                 SummaryCard(
                     title:  "Bill Paid",
-                    amount: totalBillPaid,
+                    amount: aggregateBillPaid,
                     icon:   "arrow.up.circle.fill",
                     color:  Color(hex: "#E67E22")
                 )
                 SummaryCard(
-                    title:  "Outstanding",
-                    amount: max(0, totalCCSpend - totalBillPaid),
+                    title:  hasBillServiceStatements ? "Outstanding" : "Est. Next Bill",
+                    amount: aggregateOutstanding,
                     icon:   "exclamationmark.circle.fill",
-                    color:  totalCCSpend > totalBillPaid
+                    color:  aggregateOutstanding > 0
                               ? Color(hex: "#E74C3C")
                               : Color(hex: "#3CB371")
                 )
@@ -180,7 +212,10 @@ struct CreditCardView: View {
             }
 
             ForEach(billRecordsForDisplay) { record in
-                BillStatusCard(record: record) {
+                BillStatusCard(
+                    record: record,
+                    spentOnCard: spendByBankKey[record.bank.lowercased()] ?? 0
+                ) {
                     markPaidRecord = record
                 }
             }
@@ -356,9 +391,12 @@ struct CreditCardView: View {
 
 // MARK: - Bill Status Card
 // Displays one CC bill record: statement period, total due, status chip, payments.
+// spentOnCard: actual CC purchase spend from transactions for this bank this month —
+// used as a fallback when no statement email has been parsed yet.
 private struct BillStatusCard: View {
-    let record:   CCBillRecord
-    let onMarkPaid: () -> Void
+    let record:      CCBillRecord
+    let spentOnCard: Double     // from ccPurchases grouped by bank
+    let onMarkPaid:  () -> Void
 
     private let dateF: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "MMM d, yyyy"; return f
@@ -407,18 +445,44 @@ private struct BillStatusCard: View {
             Divider()
 
             // ── Amounts grid ────────────────────────────────
-            HStack(spacing: 0) {
-                amountCell(title: "Total Due",
-                           value: record.totalDue > 0 ? "₹\(Int(record.totalDue).formatted())" : "—",
-                           color: record.totalDue > 0 ? .primary : .secondary)
-                Spacer()
-                amountCell(title: "Min. Due",
-                           value: record.minimumDue > 0 ? "₹\(Int(record.minimumDue).formatted())" : "—",
-                           color: .secondary)
-                Spacer()
-                amountCell(title: "Paid",
-                           value: record.totalPaid > 0 ? "₹\(Int(record.totalPaid).formatted())" : "—",
-                           color: record.totalPaid > 0 ? Color(hex: "#2ECC71") : .secondary)
+            if record.totalDue > 0 {
+                // Statement data available — show full bill info
+                HStack(spacing: 0) {
+                    amountCell(title: "Total Due",
+                               value: "₹\(Int(record.totalDue).formatted())",
+                               color: .primary)
+                    Spacer()
+                    amountCell(title: "Min. Due",
+                               value: record.minimumDue > 0 ? "₹\(Int(record.minimumDue).formatted())" : "—",
+                               color: .secondary)
+                    Spacer()
+                    amountCell(title: "Paid",
+                               value: record.totalPaid > 0 ? "₹\(Int(record.totalPaid).formatted())" : "—",
+                               color: record.totalPaid > 0 ? Color(hex: "#2ECC71") : .secondary)
+                }
+            } else if spentOnCard > 0 {
+                // No statement yet — show actual transaction spend as reference
+                HStack(spacing: 0) {
+                    amountCell(title: "Spent This Month",
+                               value: "₹\(Int(spentOnCard).formatted())",
+                               color: Color(hex: "#E74C3C"))
+                    Spacer()
+                    amountCell(title: "Statement",
+                               value: "Pending",
+                               color: .secondary)
+                    Spacer()
+                    amountCell(title: "Paid",
+                               value: record.totalPaid > 0 ? "₹\(Int(record.totalPaid).formatted())" : "—",
+                               color: record.totalPaid > 0 ? Color(hex: "#2ECC71") : .secondary)
+                }
+            } else {
+                HStack(spacing: 0) {
+                    amountCell(title: "Total Due", value: "—", color: .secondary)
+                    Spacer()
+                    amountCell(title: "Min. Due",  value: "—", color: .secondary)
+                    Spacer()
+                    amountCell(title: "Paid",      value: "—", color: .secondary)
+                }
             }
 
             // ── Outstanding warning ─────────────────────────

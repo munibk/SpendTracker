@@ -128,8 +128,9 @@ class TransactionStore: ObservableObject {
     }
 
     // Total spend = actual consumption debits only.
-    // Excludes: EMI (shown separately), Investment (SIPs/savings), Salary (rare debit).
-    private static let nonSpendCategories: Set<SpendCategory> = [.emi, .investment, .salary]
+    // Excludes: EMI (shown separately), Investment (SIPs/savings), Salary (rare debit),
+    // CreditCard bill payments (double-counting: individual CC purchases already tracked).
+    private static let nonSpendCategories: Set<SpendCategory> = [.emi, .investment, .salary, .creditCard]
 
     func totalSpend(for month: Date) -> Double {
         transactions(for: month)
