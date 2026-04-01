@@ -232,8 +232,8 @@ class GmailService: NSObject, ObservableObject, ASWebAuthenticationPresentationC
     // MARK: Fetch Bank Emails (v21 logic)
     // ─────────────────────────────────────────────────────
     private let bankQueries: [String] = [
-        "from:alerts@hdfcbank.net",
-        "from:noreply@hdfcbank.com",
+        "from:alerts@hdfcbank.bank.in",
+        "from:noreply@hdfcbank.bank.in",
         "from:credit_cards@icicibank.com",
         "from:autoemail@icicibank.com",
         "from:donotreply@icicibank.com",
@@ -263,6 +263,7 @@ class GmailService: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         "subject:\"credit card statement\"",
         "subject:\"payment received on your\"",
         "subject:\"payment received\" credit card",
+        "subject:\"you have done a UPI txn\"",
     ]
 
     func fetchBankEmails(store: TransactionStore, fullRescan: Bool = false, completion: @escaping (Int) -> Void) {
