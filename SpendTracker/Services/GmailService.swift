@@ -43,7 +43,7 @@ class GmailService: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         set { UserDefaults.standard.set(newValue, forKey: "gmail_token_expiry") }
     }
 
-    private init() {
+    private override init() {
         super.init()
         isConnected = accessToken != nil && refreshToken != nil
         userEmail   = UserDefaults.standard.string(forKey: "gmail_user_email") ?? ""

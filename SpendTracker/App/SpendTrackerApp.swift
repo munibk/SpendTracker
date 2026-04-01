@@ -76,7 +76,7 @@ struct SpendTrackerApp: App {
         task.expirationHandler = { task.setTaskCompleted(success: false) }
 
         // Auto fetch Gmail in background
-        gmail.fetchBankEmails(store: store) { _ in
+        GmailService.shared.fetchBankEmails(store: store) { _ in
             task.setTaskCompleted(success: true)
         }
     }
