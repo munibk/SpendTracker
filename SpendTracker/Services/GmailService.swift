@@ -1,9 +1,10 @@
+import AuthenticationServices
 import Foundation
 import UIKit
 
 // MARK: - Gmail Service
 // Uses Gmail REST API (OAuth2) to fetch bank transaction emails
-class GmailService: ObservableObject {
+class GmailService: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
 
     static let shared = GmailService()
 
@@ -16,6 +17,7 @@ class GmailService: ObservableObject {
     private let authEndpoint  = "https://accounts.google.com/o/oauth2/v2/auth"
     private let tokenEndpoint = "https://oauth2.googleapis.com/token"
     private let gmailAPI      = "https://gmail.googleapis.com/gmail/v1"
+    private var authSession: ASWebAuthenticationSession?
 
     // ── State ─────────────────────────────────────────────
     @Published var isConnected:   Bool   = false
@@ -42,6 +44,7 @@ class GmailService: ObservableObject {
     }
 
     private init() {
+        super.init()
         isConnected = accessToken != nil && refreshToken != nil
         userEmail   = UserDefaults.standard.string(forKey: "gmail_user_email") ?? ""
         // Restore "last fetched" display from persisted epoch
@@ -107,10 +110,27 @@ class GmailService: ObservableObject {
             URLQueryItem(name: "prompt",        value: "consent"),
         ]
         guard let url = components.url else { return }
-        UIApplication.shared.open(url)
+        let session = ASWebAuthenticationSession(
+            url: url,
+            callbackURLScheme: "com.yourname.spendtracker"
+        ) { [weak self] callbackURL, error in
+            guard let self, error == nil, let callbackURL else { return }
+            self.handleCallback(url: callbackURL)
+        }
+        session.presentationContextProvider = self
+        session.prefersEphemeralWebBrowserSession = false
+        authSession = session
+        session.start()
     }
 
-    func handleCallback(url: URL) {
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow } ?? ASPresentationAnchor()
+    }
+
+    private func handleCallback(url: URL) {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let code = components.queryItems?.first(where: { $0.name == "code" })?.value
         else { return }
