@@ -55,7 +55,7 @@ class FirestoreService: ObservableObject {
 
     private init() {
         firebaseUID    = UserDefaults.standard.string(forKey: "firebase_uid")
-        firebaseIDToken = GmailKeychain.read("firebase_id_token")
+        firebaseIDToken = AppKeychain.read("firebase_id_token")
         if let exp = UserDefaults.standard.object(forKey: "firebase_token_expiry") as? Date {
             firebaseTokenExpiry = exp
         }
@@ -98,7 +98,7 @@ class FirestoreService: ObservableObject {
 
             UserDefaults.standard.set(uid,    forKey: "firebase_uid")
             UserDefaults.standard.set(expiry, forKey: "firebase_token_expiry")
-            GmailKeychain.save(idt, key: "firebase_id_token")
+            AppKeychain.save(idt, key: "firebase_id_token")
 
             DispatchQueue.main.async {
                 self.isConfigured = true
@@ -131,7 +131,7 @@ class FirestoreService: ObservableObject {
             self.firebaseIDToken     = idt
             self.firebaseTokenExpiry = expiry
             UserDefaults.standard.set(expiry, forKey: "firebase_token_expiry")
-            GmailKeychain.save(idt, key: "firebase_id_token")
+            AppKeychain.save(idt, key: "firebase_id_token")
 
             DispatchQueue.main.async { completion(true) }
         }.resume()
@@ -145,7 +145,7 @@ class FirestoreService: ObservableObject {
             completion(token); return
         }
         // Re-authenticate using stored Google refresh token
-        guard let googleRefresh = GmailKeychain.read("refresh_token") else {
+        guard let googleRefresh = AppKeychain.read("refresh_token") else {
             completion(nil); return
         }
         refreshFirebaseToken(googleRefreshToken: googleRefresh) { [weak self] success in
@@ -280,7 +280,7 @@ class FirestoreService: ObservableObject {
         firebaseTokenExpiry = nil
         UserDefaults.standard.removeObject(forKey: "firebase_uid")
         UserDefaults.standard.removeObject(forKey: "firebase_token_expiry")
-        GmailKeychain.delete("firebase_id_token")
+        AppKeychain.delete("firebase_id_token")
         DispatchQueue.main.async { self.isConfigured = false }
     }
 

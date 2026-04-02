@@ -3,50 +3,6 @@ import Foundation
 import Security
 import UIKit
 
-// MARK: - Keychain Helper (Gmail OAuth tokens)
-// Tokens are stored with kSecAttrAccessibleWhenUnlockedThisDeviceOnly so they
-// are protected by the device passcode / Secure Enclave and are NOT included
-// in iCloud or iTunes backups.
-private enum GmailKeychain {
-    private static let service = "com.spendtracker.gmail"
-
-    static func save(_ value: String, key: String) {
-        guard let data = value.data(using: .utf8) else { return }
-        let query: [CFString: Any] = [
-            kSecClass:            kSecClassGenericPassword,
-            kSecAttrService:      service,
-            kSecAttrAccount:      key,
-            kSecValueData:        data,
-            kSecAttrAccessible:   kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-        ]
-        SecItemDelete(query as CFDictionary)          // remove any existing entry
-        SecItemAdd(query as CFDictionary, nil)
-    }
-
-    static func read(_ key: String) -> String? {
-        let query: [CFString: Any] = [
-            kSecClass:       kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: key,
-            kSecReturnData:  true,
-            kSecMatchLimit:  kSecMatchLimitOne,
-        ]
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    static func delete(_ key: String) {
-        let query: [CFString: Any] = [
-            kSecClass:       kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: key,
-        ]
-        SecItemDelete(query as CFDictionary)
-    }
-}
-
 // MARK: - Gmail Service
 // Uses Gmail REST API (OAuth2) to fetch bank transaction emails
 class GmailService: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
@@ -79,17 +35,17 @@ class GmailService: NSObject, ObservableObject, ASWebAuthenticationPresentationC
 
     // ── OAuth tokens — stored in Keychain, never UserDefaults ─────
     private var accessToken: String? {
-        get { GmailKeychain.read("access_token") }
+        get { AppKeychain.read("access_token") }
         set {
-            if let v = newValue { GmailKeychain.save(v, key: "access_token") }
-            else                { GmailKeychain.delete("access_token") }
+            if let v = newValue { AppKeychain.save(v, key: "access_token") }
+            else                { AppKeychain.delete("access_token") }
         }
     }
     private var refreshToken: String? {
-        get { GmailKeychain.read("refresh_token") }
+        get { AppKeychain.read("refresh_token") }
         set {
-            if let v = newValue { GmailKeychain.save(v, key: "refresh_token") }
-            else                { GmailKeychain.delete("refresh_token") }
+            if let v = newValue { AppKeychain.save(v, key: "refresh_token") }
+            else                { AppKeychain.delete("refresh_token") }
         }
     }
     // tokenExpiry is non-sensitive and small — kept in UserDefaults for simplicity
@@ -104,11 +60,11 @@ class GmailService: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         // into the Keychain and delete the plaintext copies.
         let ud = UserDefaults.standard
         if let oldAccess = ud.string(forKey: "gmail_access_token") {
-            GmailKeychain.save(oldAccess, key: "access_token")
+            AppKeychain.save(oldAccess, key: "access_token")
             ud.removeObject(forKey: "gmail_access_token")
         }
         if let oldRefresh = ud.string(forKey: "gmail_refresh_token") {
-            GmailKeychain.save(oldRefresh, key: "refresh_token")
+            AppKeychain.save(oldRefresh, key: "refresh_token")
             ud.removeObject(forKey: "gmail_refresh_token")
         }
         isConnected = accessToken != nil && refreshToken != nil
