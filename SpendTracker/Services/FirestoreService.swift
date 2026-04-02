@@ -46,6 +46,18 @@ class FirestoreService: ObservableObject {
     private var firebaseIDToken: String?
     private var firebaseTokenExpiry: Date?
 
+    // ── In-app debug log (last 50 entries) ────────────────
+    @Published var debugLogs: [String] = []
+    private func log(_ msg: String) {
+        let ts = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        let entry = "[\(ts)] \(msg)"
+        print(entry)
+        DispatchQueue.main.async {
+            self.debugLogs.insert(entry, at: 0)
+            if self.debugLogs.count > 50 { self.debugLogs = Array(self.debugLogs.prefix(50)) }
+        }
+    }
+
     private let session: URLSession = {
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForRequest  = 30
@@ -60,13 +72,14 @@ class FirestoreService: ObservableObject {
             firebaseTokenExpiry = exp
         }
         isConfigured = !projectID.isEmpty && !apiKey.isEmpty && firebaseUID != nil
+        log(isConfigured ? "Init: configured (uid=\(firebaseUID ?? ""))" : "Init: not configured (projectID=\(projectID.isEmpty ? "missing" : "ok"), apiKey=\(apiKey.isEmpty ? "missing" : "ok"), uid=\(firebaseUID == nil ? "missing" : "ok"))")
     }
 
     // ─────────────────────────────────────────────────────
     // MARK: Firebase Auth — sign in with Google id_token
     // ─────────────────────────────────────────────────────
     func signInWithGoogle(idToken: String, completion: @escaping (Bool) -> Void) {
-        guard !apiKey.isEmpty else { completion(false); return }
+        guard !apiKey.isEmpty else { log("signInWithGoogle: ❌ apiKey missing"); completion(false); return }
 
         let url = URL(string:
             "https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key=\(apiKey)")!
@@ -82,14 +95,31 @@ class FirestoreService: ObservableObject {
         ]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
+        log("signInWithGoogle: calling identitytoolkit…")
         session.dataTask(with: req) { [weak self] data, _, error in
-            guard let self, let data, error == nil,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let uid  = json["localId"]   as? String,
+            guard let self else { return }
+            if let error {
+                self.log("signInWithGoogle: ❌ network error: \(error.localizedDescription)")
+                DispatchQueue.main.async { completion(false) }; return
+            }
+            guard let data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else {
+                self.log("signInWithGoogle: ❌ no data / bad JSON")
+                DispatchQueue.main.async { completion(false) }; return
+            }
+            if let errMsg = (json["error"] as? [String: Any])?["message"] as? String {
+                self.log("signInWithGoogle: ❌ Firebase error: \(errMsg)")
+                DispatchQueue.main.async { completion(false) }; return
+            }
+            guard let uid  = json["localId"]   as? String,
                   let idt  = json["idToken"]   as? String,
                   let exp  = json["expiresIn"] as? String,
                   let secs = Double(exp)
-            else { DispatchQueue.main.async { completion(false) }; return }
+            else {
+                self.log("signInWithGoogle: ❌ missing fields in response: \(json.keys.joined(separator:","))")
+                DispatchQueue.main.async { completion(false) }; return
+            }
 
             let expiry = Date().addingTimeInterval(secs - 60)
             self.firebaseUID          = uid
@@ -99,6 +129,7 @@ class FirestoreService: ObservableObject {
             UserDefaults.standard.set(uid,    forKey: "firebase_uid")
             UserDefaults.standard.set(expiry, forKey: "firebase_token_expiry")
             AppKeychain.save(idt, key: "firebase_id_token")
+            self.log("signInWithGoogle: ✅ signed in, uid=\(uid)")
 
             DispatchQueue.main.async {
                 self.isConfigured = true
@@ -144,8 +175,9 @@ class FirestoreService: ObservableObject {
            let token = firebaseIDToken {
             completion(token); return
         }
-        // Re-authenticate using stored Google refresh token
+        log("validFirebaseToken: token expired, refreshing…")
         guard let googleRefresh = AppKeychain.read("refresh_token") else {
+            log("validFirebaseToken: ❌ no Google refresh_token in Keychain")
             completion(nil); return
         }
         refreshFirebaseToken(googleRefreshToken: googleRefresh) { [weak self] success in
@@ -159,18 +191,31 @@ class FirestoreService: ObservableObject {
 
     // Save or overwrite a single transaction
     func saveTransaction(_ txn: Transaction) {
-        guard let uid = firebaseUID, !projectID.isEmpty else { return }
+        guard let uid = firebaseUID, !projectID.isEmpty else {
+            log("saveTransaction: ❌ skipped (uid=\(firebaseUID == nil ? "nil" : "ok"), projectID=\(projectID.isEmpty ? "missing" : "ok"))")
+            return
+        }
         validFirebaseToken { [weak self] token in
-            guard let self, let token else { return }
+            guard let self, let token else {
+                self?.log("saveTransaction: ❌ no valid Firebase token")
+                return
+            }
             let docID = txn.id.uuidString
             let url   = self.docURL("users/\(uid)/transactions/\(docID)")
             var req   = URLRequest(url: url)
-            req.httpMethod = "PATCH"   // creates or updates
+            req.httpMethod = "PATCH"
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try? JSONSerialization.data(withJSONObject: self.firestoreDoc(from: txn))
-            self.session.dataTask(with: req) { _, _, error in
-                if let error { print("Firestore save error: \(error)") }
+            self.session.dataTask(with: req) { [weak self] data, resp, error in
+                if let error {
+                    self?.log("saveTransaction: ❌ \(error.localizedDescription)")
+                } else if let http = resp as? HTTPURLResponse, http.statusCode >= 400 {
+                    let body = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                    self?.log("saveTransaction: ❌ HTTP \(http.statusCode) — \(body.prefix(120))")
+                } else {
+                    self?.log("saveTransaction: ✅ \(txn.merchant) ₹\(txn.amount)")
+                }
             }.resume()
         }
     }
@@ -192,18 +237,38 @@ class FirestoreService: ObservableObject {
 
     // Fetch all transactions (called on first launch / new device)
     func fetchAllTransactions(completion: @escaping ([Transaction]) -> Void) {
-        guard let uid = firebaseUID, !projectID.isEmpty else { completion([]); return }
+        guard let uid = firebaseUID, !projectID.isEmpty else {
+            log("fetchAllTransactions: ❌ skipped — not configured")
+            completion([]); return
+        }
+        log("fetchAllTransactions: fetching…")
         validFirebaseToken { [weak self] token in
-            guard let self, let token else { completion([]); return }
+            guard let self, let token else {
+                self?.log("fetchAllTransactions: ❌ no valid token")
+                completion([]); return
+            }
             let url = self.collectionURL("users/\(uid)/transactions")
             var req = URLRequest(url: url)
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            self.session.dataTask(with: req) { [weak self] data, _, error in
-                guard let self, let data, error == nil,
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let docs = json["documents"] as? [[String: Any]]
-                else { DispatchQueue.main.async { completion([]) }; return }
+            self.session.dataTask(with: req) { [weak self] data, resp, error in
+                guard let self else { return }
+                if let error {
+                    self.log("fetchAllTransactions: ❌ \(error.localizedDescription)")
+                    DispatchQueue.main.async { completion([]) }; return
+                }
+                guard let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                else {
+                    self.log("fetchAllTransactions: ❌ bad response")
+                    DispatchQueue.main.async { completion([]) }; return
+                }
+                if let errMsg = (json["error"] as? [String: Any])?["message"] as? String {
+                    self.log("fetchAllTransactions: ❌ \(errMsg)")
+                    DispatchQueue.main.async { completion([]) }; return
+                }
+                let docs = json["documents"] as? [[String: Any]] ?? []
                 let txns = docs.compactMap { self.transaction(from: $0) }
+                self.log("fetchAllTransactions: ✅ got \(txns.count) transactions")
                 DispatchQueue.main.async { completion(txns) }
             }.resume()
         }

@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var store:      TransactionStore
     @EnvironmentObject var smsService: SMSReaderService
+    @ObservedObject private var firestore = FirestoreService.shared
     @State private var showClearAlert  = false
     @State private var showAddBudget   = false
     @State private var txnCount:   Int = 0
@@ -109,6 +110,40 @@ struct SettingsView: View {
                               systemImage: firebaseSaved ? "checkmark.circle" : "icloud.and.arrow.up")
                     }
                     .disabled(firebaseProjectID.isEmpty || firebaseAPIKey.isEmpty)
+                }
+
+                // ── Firebase Debug Log ─────────────────
+                if !firestore.debugLogs.isEmpty {
+                    Section(header: HStack {
+                        Text("Firebase Log")
+                        Spacer()
+                        Button("Clear") { FirestoreService.shared.debugLogs.removeAll() }
+                            .font(.caption)
+                    }) {
+                        ForEach(firestore.debugLogs, id: \.self) { entry in
+                            Text(entry)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(entry.contains("❌") ? .red
+                                                 : entry.contains("✅") ? .green
+                                                 : .primary)
+                                .lineLimit(3)
+                        }
+                        Button("Test: Fetch from Firestore") {
+                            FirestoreService.shared.fetchAllTransactions { txns in
+                                _ = txns // result shown in log
+                            }
+                        }
+                        .foregroundColor(.blue)
+                    }
+                } else {
+                    Section(header: Text("Firebase Log")) {
+                        Button("Test: Fetch from Firestore") {
+                            FirestoreService.shared.fetchAllTransactions { txns in
+                                _ = txns
+                            }
+                        }
+                        .foregroundColor(.blue)
+                    }
                 }
 
                 // ── About ─────────────────────────
