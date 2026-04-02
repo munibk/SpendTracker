@@ -1,9 +1,11 @@
+import AuthenticationServices
 import Foundation
+import Security
 import UIKit
 
 // MARK: - Gmail Service
 // Uses Gmail REST API (OAuth2) to fetch bank transaction emails
-class GmailService: ObservableObject {
+class GmailService: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
 
     static let shared = GmailService()
 
@@ -12,10 +14,13 @@ class GmailService: ObservableObject {
         UserDefaults.standard.string(forKey: "gmail_client_id") ?? "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
     }
     private let redirectURI   = "com.yourname.spendtracker:/oauth2callback"
-    private let scope         = "https://www.googleapis.com/auth/gmail.readonly"
+    // openid adds the id_token field to the token response, which is used
+    // to sign into Firebase Auth (required for Firestore security rules).
+    private let scope         = "https://www.googleapis.com/auth/gmail.readonly openid email"
     private let authEndpoint  = "https://accounts.google.com/o/oauth2/v2/auth"
     private let tokenEndpoint = "https://oauth2.googleapis.com/token"
     private let gmailAPI      = "https://gmail.googleapis.com/gmail/v1"
+    private var authSession: ASWebAuthenticationSession?
 
     // ── State ─────────────────────────────────────────────
     @Published var isConnected:   Bool   = false
@@ -28,24 +33,44 @@ class GmailService: ObservableObject {
     @Published var totalEmailCount: Int     = 0
     @Published var processedEmailCount: Int = 0
 
+    // ── OAuth tokens — stored in Keychain, never UserDefaults ─────
     private var accessToken: String? {
-        get { UserDefaults.standard.string(forKey: "gmail_access_token") }
-        set { UserDefaults.standard.set(newValue, forKey: "gmail_access_token") }
+        get { AppKeychain.read("access_token") }
+        set {
+            if let v = newValue { AppKeychain.save(v, key: "access_token") }
+            else                { AppKeychain.delete("access_token") }
+        }
     }
     private var refreshToken: String? {
-        get { UserDefaults.standard.string(forKey: "gmail_refresh_token") }
-        set { UserDefaults.standard.set(newValue, forKey: "gmail_refresh_token") }
+        get { AppKeychain.read("refresh_token") }
+        set {
+            if let v = newValue { AppKeychain.save(v, key: "refresh_token") }
+            else                { AppKeychain.delete("refresh_token") }
+        }
     }
+    // tokenExpiry is non-sensitive and small — kept in UserDefaults for simplicity
     private var tokenExpiry: Date? {
         get { UserDefaults.standard.object(forKey: "gmail_token_expiry") as? Date }
         set { UserDefaults.standard.set(newValue, forKey: "gmail_token_expiry") }
     }
 
-    private init() {
+    private override init() {
+        super.init()
+        // One-time migration: move any tokens previously stored in UserDefaults
+        // into the Keychain and delete the plaintext copies.
+        let ud = UserDefaults.standard
+        if let oldAccess = ud.string(forKey: "gmail_access_token") {
+            AppKeychain.save(oldAccess, key: "access_token")
+            ud.removeObject(forKey: "gmail_access_token")
+        }
+        if let oldRefresh = ud.string(forKey: "gmail_refresh_token") {
+            AppKeychain.save(oldRefresh, key: "refresh_token")
+            ud.removeObject(forKey: "gmail_refresh_token")
+        }
         isConnected = accessToken != nil && refreshToken != nil
-        userEmail   = UserDefaults.standard.string(forKey: "gmail_user_email") ?? ""
+        userEmail   = ud.string(forKey: "gmail_user_email") ?? ""
         // Restore "last fetched" display from persisted epoch
-        let epoch = UserDefaults.standard.double(forKey: "gmail_incremental_after")
+        let epoch = ud.double(forKey: "gmail_incremental_after")
         if epoch > 0 { lastFetchDate = Date(timeIntervalSince1970: epoch) }
     }
 
@@ -107,10 +132,27 @@ class GmailService: ObservableObject {
             URLQueryItem(name: "prompt",        value: "consent"),
         ]
         guard let url = components.url else { return }
-        UIApplication.shared.open(url)
+        let session = ASWebAuthenticationSession(
+            url: url,
+            callbackURLScheme: "com.yourname.spendtracker"
+        ) { [weak self] callbackURL, error in
+            guard let self, error == nil, let callbackURL else { return }
+            self.handleCallback(url: callbackURL)
+        }
+        session.presentationContextProvider = self
+        session.prefersEphemeralWebBrowserSession = false
+        authSession = session
+        session.start()
     }
 
-    func handleCallback(url: URL) {
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow } ?? ASPresentationAnchor()
+    }
+
+    private func handleCallback(url: URL) {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let code = components.queryItems?.first(where: { $0.name == "code" })?.value
         else { return }
@@ -131,6 +173,7 @@ class GmailService: ObservableObject {
             guard let self, let data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { return }
+            let idToken = json["id_token"] as? String
             DispatchQueue.main.async {
                 if let a = json["access_token"]  as? String { self.accessToken  = a }
                 if let r = json["refresh_token"] as? String { self.refreshToken = r }
@@ -140,6 +183,13 @@ class GmailService: ObservableObject {
                 self.isConnected = true
                 self.fetchUserEmail()
                 self.fetchStatus = "Connected ✅"
+                // Sign into Firebase Auth so Firestore security rules can verify identity
+                if let idToken {
+                    FirestoreService.shared.signInWithGoogle(idToken: idToken) { success in
+                        if success { print("✅ Signed into Firebase Auth") }
+                        else       { print("⚠️ Firebase Auth sign-in failed — Firestore sync disabled") }
+                    }
+                }
             }
         }.resume()
     }
@@ -212,11 +262,13 @@ class GmailService: ObservableObject {
     // MARK: Fetch Bank Emails (v21 logic)
     // ─────────────────────────────────────────────────────
     private let bankQueries: [String] = [
-        "from:alerts@hdfcbank.net",
-        "from:noreply@hdfcbank.com",
+        "from:alerts@hdfcbank.bank.in",
+        "from:noreply@hdfcbank.bank.in",
         "from:credit_cards@icicibank.com",
         "from:autoemail@icicibank.com",
         "from:donotreply@icicibank.com",
+        "from:alerts@icicibank.com",
+        "from:noreply@icicibank.com",
         "from:sbiatm@sbi.co.in",
         "from:noreply@sbi.co.in",
         "from:alerts@axisbank.com",
@@ -237,6 +289,11 @@ class GmailService: ObservableObject {
         "subject:\"credit transaction alert\"",
         "subject:\"debit transaction alert\"",
         "subject:INR",
+        // CC statement & payment confirmation emails
+        "subject:\"credit card statement\"",
+        "subject:\"payment received on your\"",
+        "subject:\"payment received\" credit card",
+        "subject:\"you have done a UPI txn\"",
     ]
 
     func fetchBankEmails(store: TransactionStore, fullRescan: Bool = false, completion: @escaping (Int) -> Void) {
@@ -407,6 +464,9 @@ class GmailService: ObservableObject {
                         DispatchQueue.main.async { txns.forEach { store.addTransaction($0) } }
                         lock.lock(); count += txns.count; lock.unlock()
                     }
+
+                    // Track CC bill statement and payment-confirmation emails
+                    CCBillService.shared.processEmail(subject: subject, body: body, date: date)
 
                     lock.lock()
                     done += 1

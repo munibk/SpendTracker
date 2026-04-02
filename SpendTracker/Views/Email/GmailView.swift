@@ -1,48 +1,28 @@
-import SwiftUI
+﻿import SwiftUI
 
 // MARK: - Gmail View
 struct GmailView: View {
     @EnvironmentObject var store:  TransactionStore
     @StateObject private var gmail = GmailService.shared
-    @State private var showManualImport = false
-    @State private var showSetupGuide   = false
-    @State private var fetchCount       = 0
-    @State private var showFetchResult  = false
-    @State private var clientIDText     = ""
-    @State private var showClientIDSaved  = false
-    @State private var showYearPicker      = false
-    @State private var selectedStartYear   = Calendar.current.component(.year, from: Date()) - 2
+    @State private var showManualImport  = false
+    @State private var showSetupGuide    = false
+    @State private var fetchCount        = 0
+    @State private var showFetchResult   = false
+    @State private var showYearPicker    = false
+    @State private var selectedStartYear = Calendar.current.component(.year, from: Date()) - 2
+    @State private var clientIDText      = ""
 
     var body: some View {
         NavigationView {
             List {
 
-                // ── Client ID Setup ───────────────────────────
-                Section(header: Text("Google Client ID")) {
-                    if gmail.isConfigured {
-                        HStack {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Client ID Configured")
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-                                Text(gmail.savedClientID().prefix(30) + "...")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        Button(action: { clientIDText = gmail.savedClientID() }) {
-                            Label("Change Client ID", systemImage: "pencil")
-                                .foregroundColor(Color(hex: "#6C63FF"))
-                        }
-                    } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Enter your Google OAuth Client ID")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            TextField("xxxxx.apps.googleusercontent.com",
-                                     text: $clientIDText)
+                // ── One-time Client ID setup ───────────────────
+                if !gmail.isConfigured {
+                    Section(header: Text("One-time Setup")) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Enter your Google OAuth Client ID once to enable Gmail sign-in.")
+                                .font(.caption).foregroundColor(.secondary)
+                            TextField("xxxx.apps.googleusercontent.com", text: $clientIDText)
                                 .font(.caption)
                                 .autocapitalization(.none)
                                 .autocorrectionDisabled()
@@ -51,197 +31,172 @@ struct GmailView: View {
                                     .foregroundColor(.white)
                                     .frame(maxWidth: .infinity)
                                     .padding(8)
-                                    .background(clientIDText.isEmpty
-                                                ? Color.gray
-                                                : Color(hex: "#6C63FF"))
+                                    .background(clientIDText.isEmpty ? Color.gray : Color(hex: "#6C63FF"))
                                     .cornerRadius(8)
                             }
                             .disabled(clientIDText.isEmpty)
                             .buttonStyle(.plain)
                         }
                         .padding(.vertical, 4)
-                    }
-
-                    // Show text field to change if configured
-                    if gmail.isConfigured && !clientIDText.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            TextField("xxxxx.apps.googleusercontent.com",
-                                     text: $clientIDText)
-                                .font(.caption)
-                                .autocapitalization(.none)
-                                .autocorrectionDisabled()
-                            Button(action: saveClientID) {
-                                Label("Update Client ID", systemImage: "checkmark.circle.fill")
-                                    .foregroundColor(.white)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(8)
-                                    .background(Color(hex: "#6C63FF"))
-                                    .cornerRadius(8)
-                            }
-                            .buttonStyle(.plain)
+                        Button(action: { showSetupGuide = true }) {
+                            Label("How to get a Client ID", systemImage: "questionmark.circle")
+                                .font(.caption).foregroundColor(Color(hex: "#6C63FF"))
                         }
-                        .padding(.vertical, 4)
-                    }
-
-                    if showClientIDSaved {
-                        Text("✅ Client ID saved successfully!")
-                            .font(.caption)
-                            .foregroundColor(.green)
-                    }
-
-                    Button(action: { showSetupGuide = true }) {
-                        Label("How to get Client ID?",
-                              systemImage: "questionmark.circle")
-                            .font(.caption)
-                            .foregroundColor(Color(hex: "#6C63FF"))
                     }
                 }
 
-                // ── Connection Status ─────────────────────────
-                Section {
-                    if gmail.isConnected {
-                        connectedView
-                    } else {
-                        notConnectedView
+                // ── Sign in with Google ────────────────────────
+                if gmail.isConfigured && !gmail.isConnected {
+                    Section {
+                        Button(action: { gmail.startLogin() }) {
+                            HStack(spacing: 14) {
+                                Image(systemName: "g.circle.fill")
+                                    .font(.title2)
+                                    .foregroundColor(Color(red: 0.26, green: 0.52, blue: 0.96))
+                                    .frame(width: 36, height: 36)
+                                Text("Sign in with Google")
+                                    .fontWeight(.semibold)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .background(Color(.systemBackground))
+                            .cornerRadius(10)
+                            .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
+                        }
+                        .buttonStyle(.plain)
+                        Text("Read-only access — SpendTracker never sends emails or modifies your inbox.")
+                            .font(.caption2).foregroundColor(.secondary)
                     }
                 }
 
-                // ── Actions (when connected) ──────────────────
+                // ── Connected state ────────────────────────────
                 if gmail.isConnected {
+                    Section {
+                        HStack(spacing: 14) {
+                            ZStack {
+                                Circle().fill(Color.green.opacity(0.15)).frame(width: 44, height: 44)
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green).font(.title2)
+                            }
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Google Account Connected")
+                                    .font(.subheadline).fontWeight(.semibold)
+                                Text(gmail.userEmail)
+                                    .font(.caption).foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 6)
+                    }
+
                     Section(header: Text("Import")) {
-                        // Incremental fetch — only new emails since last run
                         Button(action: fetchEmails) {
                             HStack {
                                 if gmail.isFetching {
                                     ProgressView().scaleEffect(0.8).frame(width: 20)
                                 } else {
                                     Image(systemName: "envelope.badge")
-                                        .foregroundColor(Color(hex: "#6C63FF"))
-                                        .frame(width: 20)
+                                        .foregroundColor(Color(hex: "#6C63FF")).frame(width: 20)
                                 }
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(gmail.isFetching ? "Scanning emails..." : "Fetch New Emails")
-                                    Text(fetchSubtitle)
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
+                                    Text(gmail.isFetching ? "Scanning emails…" : "Fetch New Emails")
+                                    Text(fetchSubtitle).font(.caption2).foregroundColor(.secondary)
                                 }
                             }
                         }
                         .disabled(gmail.isFetching)
 
-                        // Live progress bar
                         if gmail.isFetching && gmail.totalEmailCount > 0 {
                             VStack(alignment: .leading, spacing: 4) {
-                                ProgressView(value: gmail.fetchProgress)
-                                    .tint(Color(hex: "#6C63FF"))
+                                ProgressView(value: gmail.fetchProgress).tint(Color(hex: "#6C63FF"))
                                 Text("\(gmail.processedEmailCount) of \(gmail.totalEmailCount) emails processed")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
+                                    .font(.caption2).foregroundColor(.secondary)
                             }
                             .padding(.vertical, 2)
                         }
 
-                        // Full re-scan from configured start year
                         Button(action: rescanAllEmails) {
                             HStack {
                                 Image(systemName: "arrow.clockwise.circle")
-                                    .foregroundColor(.orange)
-                                    .frame(width: 20)
+                                    .foregroundColor(.orange).frame(width: 20)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("Full Re-scan All History")
                                     Text("Re-imports from \(gmail.configuredStartYear) onwards")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
+                                        .font(.caption2).foregroundColor(.secondary)
                                 }
                             }
                         }
                         .disabled(gmail.isFetching)
 
-                        // Year picker for history start
                         Button(action: {
                             selectedStartYear = gmail.configuredStartYear
                             showYearPicker    = true
                         }) {
                             HStack {
                                 Image(systemName: "calendar")
-                                    .foregroundColor(.secondary)
-                                    .frame(width: 20)
+                                    .foregroundColor(.secondary).frame(width: 20)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("History Start Year")
                                     Text("Currently: \(gmail.configuredStartYear)")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
+                                        .font(.caption2).foregroundColor(.secondary)
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .font(.caption).foregroundColor(.secondary)
                             }
                         }
                         .disabled(gmail.isFetching)
 
                         Button(action: { showManualImport = true }) {
-                            Label("Paste Email Manually",
-                                  systemImage: "doc.text")
+                            Label("Paste Email Manually", systemImage: "doc.text")
                         }
                     }
 
                     Section(header: Text("Status")) {
                         HStack {
-                            Text("Status")
-                            Spacer()
+                            Text("Status"); Spacer()
                             Text(gmail.fetchStatus)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.trailing)
+                                .font(.caption).foregroundColor(.secondary)
+                                .lineLimit(2).multilineTextAlignment(.trailing)
                         }
                         if let last = gmail.lastFetchDate {
                             HStack {
-                                Text("Last Fetched")
-                                Spacer()
-                                Text(last.formatted(
-                                    .relative(presentation: .numeric)
-                                ))
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                                Text("Last Fetched"); Spacer()
+                                Text(last.formatted(.relative(presentation: .numeric)))
+                                    .font(.caption).foregroundColor(.secondary)
                             }
                         }
                         HStack {
-                            Text("Total Imported")
-                            Spacer()
-                            Text("\(gmail.importedCount)")
-                                .foregroundColor(.secondary)
+                            Text("Total Imported"); Spacer()
+                            Text("\(gmail.importedCount)").foregroundColor(.secondary)
                         }
                     }
 
                     Section(header: Text("Bank Email Filters")) {
                         Text("Automatically detects emails from:")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        bankList
+                            .font(.caption).foregroundColor(.secondary)
+                        ForEach(["HDFC Bank", "ICICI Bank", "SBI", "Axis Bank",
+                                 "Kotak Bank", "Yes Bank", "IndusInd Bank"], id: \.self) { bank in
+                            Text(bank).font(.caption).foregroundColor(.secondary)
+                        }
                     }
 
                     Section {
-                        Button(role: .destructive,
-                               action: { gmail.disconnect() }) {
-                            Label("Disconnect Gmail",
-                                  systemImage: "xmark.circle")
+                        Button(role: .destructive, action: { gmail.disconnect() }) {
+                            Label("Disconnect Gmail", systemImage: "xmark.circle")
                         }
                     }
                 }
 
-                // ── Setup Guide ───────────────────────────────
+                // ── Setup Guide ────────────────────────────────
                 Section {
                     Button(action: { showSetupGuide = true }) {
-                        Label("Gmail Setup Guide",
-                              systemImage: "questionmark.circle")
+                        Label("Gmail Setup Guide", systemImage: "questionmark.circle")
                             .foregroundColor(Color(hex: "#6C63FF"))
                     }
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Gmail Import")
+            .navigationTitle("Email Import")
             .navigationBarTitleDisplayMode(.large)
             .sheet(isPresented: $showManualImport) {
                 ManualEmailImportView()
@@ -254,8 +209,7 @@ struct GmailView: View {
                     gmail.configuredStartYear = year
                 }
             }
-            .alert("Fetch Complete",
-                   isPresented: $showFetchResult) {
+            .alert("Fetch Complete", isPresented: $showFetchResult) {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(fetchCount > 0
@@ -265,7 +219,8 @@ struct GmailView: View {
         }
     }
 
-    // Subtitle for Fetch button showing last fetch time or first-run hint
+    // MARK: - Helpers
+
     private var fetchSubtitle: String {
         if let last = gmail.lastFetchDate {
             let fmt = RelativeDateTimeFormatter()
@@ -275,97 +230,15 @@ struct GmailView: View {
         return "First run — fetches from \(gmail.configuredStartYear) onwards"
     }
 
-    // ── Connected View ────────────────────────────────────────
-    private var connectedView: some View {
-        HStack(spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(Color.green.opacity(0.15))
-                    .frame(width: 44, height: 44)
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
-                    .font(.title2)
-            }
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Gmail Connected")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                Text(gmail.userEmail)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-        }
-        .padding(.vertical, 6)
-    }
-
-    // ── Not Connected View ────────────────────────────────────
-    private var notConnectedView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "envelope.circle.fill")
-                .font(.system(size: 50))
-                .foregroundColor(Color(hex: "#6C63FF"))
-
-            VStack(spacing: 6) {
-                Text("Connect Gmail")
-                    .font(.headline)
-                Text("Automatically import bank transaction emails")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-
-            Button(action: { gmail.startLogin() }) {
-                HStack {
-                    Image(systemName: "envelope.fill")
-                    Text("Connect with Gmail")
-                        .fontWeight(.semibold)
-                }
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(Color(hex: "#6C63FF"))
-                .foregroundColor(.white)
-                .cornerRadius(12)
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 8)
-
-            Text("Only reads emails — never sends or modifies")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-        }
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity)
-    }
-
-    // ── Bank List ─────────────────────────────────────────────
-    private var bankList: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            let banks = [
-                ("ICICI Bank", "credit_cards@icicibank.com"),
-                ("Axis Bank",  "alerts@axis.bank.in"),
-            ]
-            ForEach(banks, id: \.0) { bank in
-                HStack {
-                    Text(bank.0)
-                        .font(.caption)
-                        .fontWeight(.medium)
-                    Spacer()
-                    Text(bank.1)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    // ── Fetch Emails ──────────────────────────────────────────
     private func saveClientID() {
         gmail.saveClientID(clientIDText)
-        showClientIDSaved = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            showClientIDSaved = false
-            clientIDText = ""
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { clientIDText = "" }
+    }
+
+    private func fetchEmails() {
+        gmail.fetchBankEmails(store: store) { count in
+            fetchCount      = count
+            showFetchResult = true
         }
     }
 
@@ -378,15 +251,7 @@ struct GmailView: View {
             }
         }
     }
-
-    private func fetchEmails() {
-        gmail.fetchBankEmails(store: store) { count in
-            fetchCount      = count
-            showFetchResult = true
-        }
-    }
 }
-
 // MARK: - Manual Email Import
 struct ManualEmailImportView: View {
     @EnvironmentObject var store: TransactionStore
@@ -430,8 +295,8 @@ struct ManualEmailImportView: View {
                             }
                             Spacer()
                             Text(txn.type == .debit
-                                 ? "-₹\(Int(txn.amount))"
-                                 : "+₹\(Int(txn.amount))")
+                                 ? "-â‚¹\(Int(txn.amount))"
+                                 : "+â‚¹\(Int(txn.amount))")
                                 .fontWeight(.bold)
                                 .foregroundColor(txn.type.color)
                         }
@@ -448,7 +313,7 @@ struct ManualEmailImportView: View {
                     Section {
                         Text(result)
                             .foregroundColor(
-                                result.contains("✅") ? .green : .red
+                                result.contains("âœ…") ? .green : .red
                             )
                     }
                 }
@@ -483,7 +348,7 @@ struct ManualEmailImportView: View {
         if let txn {
             parsed = txn
         } else {
-            result     = "❌ Could not parse. Make sure it's a bank transaction email."
+            result     = "âŒ Could not parse. Make sure it's a bank transaction email."
             showResult = true
         }
     }
@@ -491,7 +356,7 @@ struct ManualEmailImportView: View {
     private func saveParsed() {
         guard let txn = parsed else { return }
         store.addTransaction(txn)
-        result     = "✅ Transaction saved!"
+        result     = "âœ… Transaction saved!"
         showResult = true
         parsed     = nil
         emailText  = ""
@@ -513,22 +378,22 @@ struct GmailSetupGuideView: View {
                           systemImage: "checkmark.circle")
                 }
 
-                Section(header: Text("Step 1 — Google Cloud Console")) {
+                Section(header: Text("Step 1 â€” Google Cloud Console")) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("1. Go to console.cloud.google.com")
                         Text("2. Create a new project named 'SpendTracker'")
-                        Text("3. Go to APIs & Services → Enable APIs")
-                        Text("4. Search 'Gmail API' → Enable it")
+                        Text("3. Go to APIs & Services â†’ Enable APIs")
+                        Text("4. Search 'Gmail API' â†’ Enable it")
                     }
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .padding(.vertical, 4)
                 }
 
-                Section(header: Text("Step 2 — OAuth Credentials")) {
+                Section(header: Text("Step 2 â€” OAuth Credentials")) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("1. Go to APIs & Services → Credentials")
-                        Text("2. Create Credentials → OAuth Client ID")
+                        Text("1. Go to APIs & Services â†’ Credentials")
+                        Text("2. Create Credentials â†’ OAuth Client ID")
                         Text("3. Application type: iOS")
                         Text("4. Bundle ID: com.yourname.spendtracker")
                         Text("5. Copy the Client ID")
@@ -538,7 +403,7 @@ struct GmailSetupGuideView: View {
                     .padding(.vertical, 4)
                 }
 
-                Section(header: Text("Step 3 — Add to App")) {
+                Section(header: Text("Step 3 â€” Add to App")) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("1. Open GmailService.swift")
                         Text("2. Find: YOUR_GOOGLE_CLIENT_ID")
@@ -550,9 +415,9 @@ struct GmailSetupGuideView: View {
                     .padding(.vertical, 4)
                 }
 
-                Section(header: Text("Step 4 — Connect in App")) {
+                Section(header: Text("Step 4 â€” Connect in App")) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("1. Open SpendTracker → Gmail tab")
+                        Text("1. Open SpendTracker â†’ Gmail tab")
                         Text("2. Tap 'Connect with Gmail'")
                         Text("3. Sign in with Google")
                         Text("4. Allow readonly access")

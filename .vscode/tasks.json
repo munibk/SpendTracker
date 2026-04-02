@@ -1,0 +1,15 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Download Latest IPA",
+            "type": "shell",
+            "command": "gh run download --name SpendTracker-IPA --dir ./builds; Write-Host 'IPA saved to ./builds/SpendTracker.ipa'",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        }
+    ]
+}

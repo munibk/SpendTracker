@@ -15,6 +15,8 @@ class TransactionStore: ObservableObject {
     init() {
         loadFromDisk()
         if budgets.isEmpty { setDefaultBudgets() }
+        // If this is a new device with no local data, pull from Firestore
+        loadFromFirestoreIfEmpty()
     }
 
     // MARK: - CRUD
@@ -30,6 +32,7 @@ class TransactionStore: ObservableObject {
             self.transactions.sort { $0.date > $1.date }
             self.save()
             self.regenerateReport(for: txn.date)
+            FirestoreService.shared.saveTransaction(txn)
         }
     }
 
@@ -55,6 +58,7 @@ class TransactionStore: ObservableObject {
             self.transactions[idx] = txn
             self.save()
             self.regenerateReport(for: txn.date)
+            FirestoreService.shared.saveTransaction(txn)
         }
     }
 
@@ -64,6 +68,7 @@ class TransactionStore: ObservableObject {
             self.transactions.removeAll { $0.id == id }
             self.save()
             self.regenerateReport(for: txn.date)
+            FirestoreService.shared.deleteTransaction(id: id)
         }
     }
 
@@ -73,6 +78,7 @@ class TransactionStore: ObservableObject {
             self.monthlyReports = []
             UserDefaults.standard.removeObject(forKey: self.txKey)
             UserDefaults.standard.removeObject(forKey: self.reportKey)
+            FirestoreService.shared.clearAllRemoteData()
         }
     }
 
@@ -127,10 +133,14 @@ class TransactionStore: ObservableObject {
         return result
     }
 
-    // Total spend excludes EMI — EMI is shown separately on the dashboard
+    // Total spend = actual consumption debits only.
+    // Excludes: EMI (shown separately), Investment (SIPs/savings), Salary (rare debit),
+    // CreditCard bill payments (double-counting: individual CC purchases already tracked).
+    private static let nonSpendCategories: Set<SpendCategory> = [.emi, .investment, .salary, .creditCard]
+
     func totalSpend(for month: Date) -> Double {
         transactions(for: month)
-            .filter { $0.type == .debit && $0.category != .emi }
+            .filter { $0.type == .debit && !Self.nonSpendCategories.contains($0.category) }
             .reduce(0) { $0 + $1.amount }
     }
 
@@ -174,6 +184,7 @@ class TransactionStore: ObservableObject {
     func setBudget(_ amount: Double, for category: SpendCategory) {
         budgets[category] = amount
         save()
+        FirestoreService.shared.saveBudgets(budgets)
     }
 
     func budgetUtilization(for category: SpendCategory, month: Date) -> Double? {
@@ -279,6 +290,38 @@ class TransactionStore: ObservableObject {
                 self.transactions   = loadedTxns
                 self.monthlyReports = loadedReports
                 self.budgets        = loadedBudgets
+            }
+        }
+    }
+
+    // Pull all transactions from Firestore when local store is empty
+    // (new device install, or after "Clear All Data").
+    // Runs ~0.5s after init so local disk load completes first.
+    private func loadFromFirestoreIfEmpty() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            guard let self, self.transactions.isEmpty,
+                  FirestoreService.shared.firebaseUID != nil else { return }
+            print("📥 Local store empty — pulling from Firestore…")
+            FirestoreService.shared.fetchAllTransactions { [weak self] txns in
+                guard let self, !txns.isEmpty else { return }
+                print("✅ Restored \(txns.count) transactions from Firestore")
+                let fresh = txns.filter { !self.isDuplicate($0) }
+                self.transactions = fresh.sorted { $0.date > $1.date }
+                self.save()
+                // Rebuild reports for every month that has transactions
+                let months = Set(fresh.map {
+                    Calendar.current.startOfDay(
+                        for: Calendar.current.date(
+                            from: Calendar.current.dateComponents([.year, .month], from: $0.date)
+                        ) ?? $0.date
+                    )
+                })
+                months.forEach { self.regenerateReport(for: $0) }
+            }
+            FirestoreService.shared.fetchBudgets { [weak self] budgets in
+                guard let self, !budgets.isEmpty else { return }
+                self.budgets = budgets
+                self.save()
             }
         }
     }

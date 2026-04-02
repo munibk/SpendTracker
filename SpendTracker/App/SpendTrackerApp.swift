@@ -6,7 +6,6 @@ struct SpendTrackerApp: App {
 
     @StateObject private var store      = TransactionStore()
     @StateObject private var smsService = SMSReaderService()
-    @StateObject private var gmail      = GmailService.shared
 
     init() {
         registerBackgroundTasks()
@@ -36,12 +35,6 @@ struct SpendTrackerApp: App {
     // ─────────────────────────────────────────────────────────
     private func handleIncomingURL(_ url: URL) {
         let scheme = url.scheme?.lowercased() ?? ""
-
-        // Gmail OAuth callback
-        if scheme == "com.yourname.spendtracker" {
-            gmail.handleCallback(url: url)
-            return
-        }
 
         // SMS import via Shortcuts
         if scheme == "spendtracker" {
@@ -83,7 +76,7 @@ struct SpendTrackerApp: App {
         task.expirationHandler = { task.setTaskCompleted(success: false) }
 
         // Auto fetch Gmail in background
-        gmail.fetchBankEmails(store: store) { _ in
+        GmailService.shared.fetchBankEmails(store: store) { _ in
             task.setTaskCompleted(success: true)
         }
     }

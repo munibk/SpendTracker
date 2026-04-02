@@ -71,7 +71,7 @@ struct DashboardView: View {
                     Text("₹\(Int(totalSpend))")
                         .font(.system(size: 42, weight: .bold, design: .rounded))
                         .foregroundColor(.white)
-                    Text("Spent This Month (excl. EMI)")
+                    Text("Spent This Month")
                         .font(.caption).foregroundColor(.white.opacity(0.7))
                 }
                 Spacer()

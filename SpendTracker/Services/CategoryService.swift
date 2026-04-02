@@ -22,6 +22,35 @@ class CategoryService {
     }
 
     // ─────────────────────────────────────────────────────────
+    // MARK: Frequency Learning
+    // Tracks merchant → category assignment counts.
+    // Built automatically whenever the user corrects a category.
+    // Each correction gives a +4 score boost per occurrence in future parses.
+    // ─────────────────────────────────────────────────────────
+    private var frequencyMap: [String: [String: Int]] {
+        get {
+            guard let data    = UserDefaults.standard.data(forKey: "categoryFrequency"),
+                  let decoded = try? JSONDecoder().decode([String: [String: Int]].self, from: data)
+            else { return [:] }
+            return decoded
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(data, forKey: "categoryFrequency")
+            }
+        }
+    }
+
+    func learnCategory(merchant: String, category: SpendCategory) {
+        var map    = frequencyMap
+        let key    = merchant.lowercased()
+        var counts = map[key] ?? [:]
+        counts[category.rawValue, default: 0] += 1
+        map[key] = counts
+        frequencyMap = map
+    }
+
+    // ─────────────────────────────────────────────────────────
     // MARK: Main Categorize
     // ─────────────────────────────────────────────────────────
     func categorize(
@@ -36,8 +65,14 @@ class CategoryService {
         let ml = merchant.lowercased()
         let bl = body.lowercased()
 
-        // 1. User override (highest priority)
+        // 1. Exact user override (highest priority)
         if let override = userOverrides[ml] { return override }
+
+        // 1a. Partial/fuzzy override match
+        // e.g. override for "amazon pay" also applies to "Amazon Pay In Grocery"
+        for (key, cat) in userOverrides where key.count >= 4 {
+            if ml.contains(key) || key.contains(ml) { return cat }
+        }
 
         // 1b. ACH bank-to-bank debit → EMI / loan repayment
         // Pattern: ACH-DR or NACH debit from one bank to another bank.
@@ -49,19 +84,40 @@ class CategoryService {
         if isACH { return .emi }
 
         // 2. UPI check FIRST — before ATM
-        // If body mentions UPI/IMPS/NEFT with a reference number
-        // it is a UPI transfer NOT ATM withdrawal
+        // Covers all major Indian bank UPI alert patterns:
+        //   HDFC  : "debited by upi; ref no"
+        //   ICICI : "upi/p2m/123456/flipkart"
+        //   SBI   : "transferred via upi"
+        //   Axis  : "upi txn", "upi transaction"
+        //   Generic: "sent via upi", "upi transfer", @vpa present
         let isUPI = bl.contains("upi/") ||
                     bl.contains("upi-") ||
                     bl.contains("upi ref") ||
                     bl.contains("upi id") ||
+                    bl.contains("by upi") ||
+                    bl.contains("via upi") ||
+                    bl.contains("through upi") ||
+                    bl.contains("upi txn") ||
+                    bl.contains("upi transfer") ||
+                    bl.contains("upi transaction") ||
+                    bl.contains("sent to upi") ||
+                    bl.contains("; upi") ||
+                    bl.contains("trf/upi") ||
+                    bl.contains("neft/") ||
+                    bl.contains("imps/") ||
                     (bl.contains("upi") && (bl.contains("p2a") || bl.contains("p2m") || bl.contains("p2p"))) ||
                     upiId != nil
 
         if isUPI {
-            // Even if UPI, try to find a better category from merchant/body
-            let scored = scoreCategories(merchant: ml, body: bl, upiId: upiId)
-            if let best = scored.first, best.score >= 3 {
+            // For UPI flows, only override with a specific merchant category when
+            // there is a STRONG match — score >= 4 requires at least one merchant-level
+            // keyword hit (worth +3). This prevents body-only investment keyword noise
+            // (e.g. "lic", "sip" appearing in SMS footers) from falsely winning.
+            // Investment is excluded entirely: genuine SIP/MF payments should reach
+            // Groww/Zerodha via VPA boost (+5) which easily clears the 4-point bar.
+            let scored = scoreCategories(merchant: ml, body: bl, upiId: upiId,
+                                         exclude: [.investment])
+            if let best = scored.first, best.score >= 4 {
                 return best.category
             }
             return .upi
@@ -83,9 +139,9 @@ class CategoryService {
                         bl.contains("pos purchase") ||
                         bl.contains("online purchase")
 
-        // 5. Score categories
+        // 5. Score categories (threshold >= 2 to avoid 1-word false positives)
         let scored = scoreCategories(merchant: ml, body: bl, upiId: upiId)
-        if let best = scored.first, best.score > 0 { return best.category }
+        if let best = scored.first, best.score >= 2 { return best.category }
 
         // 6. Card transaction with no category match → shopping
         if isCardTxn { return .shopping }
@@ -109,12 +165,13 @@ class CategoryService {
     private func scoreCategories(
         merchant: String,
         body:     String,
-        upiId:    String?
+        upiId:    String?,
+        exclude:  Set<SpendCategory> = []
     ) -> [CategoryScore] {
         var scores: [SpendCategory: Int] = [:]
 
         for cat in SpendCategory.allCases
-        where cat != .others && cat != .salary && cat != .upi && cat != .atm {
+        where cat != .others && cat != .salary && cat != .upi && cat != .atm && !exclude.contains(cat) {
             var score = 0
             for kw in cat.keywords {
                 if merchant.contains(kw) { score += 3 }
@@ -138,6 +195,17 @@ class CategoryService {
             }
         }
 
+        // Frequency learning boost: past user corrections for this merchant
+        // Each time a user manually assigned a category, it earns +4 per correction.
+        let freq = frequencyMap[merchant]
+        if let freq {
+            for (catRaw, count) in freq {
+                if let cat = SpendCategory(rawValue: catRaw) {
+                    scores[cat, default: 0] += count * 4
+                }
+            }
+        }
+
         return scores
             .sorted { $0.value > $1.value }
             .map { CategoryScore(category: $0.key, score: $0.value) }
@@ -148,6 +216,17 @@ class CategoryService {
         if bl.contains("salary") || bl.contains("payroll") { return .salary }
         if bl.contains("refund") || bl.contains("cashback") || bl.contains("reversal") { return .others }
         if bl.contains("mutual fund") || bl.contains("dividend") || bl.contains("fd maturity") { return .investment }
+        // UPI / IMPS / NEFT credit (received money from someone) → UPI Transfer, not Others
+        let isUPICredit = bl.contains("upi/") || bl.contains("upi-") ||
+                          bl.contains("upi ref") || bl.contains("upi id") ||
+                          bl.contains("by upi") || bl.contains("via upi") ||
+                          bl.contains("through upi") || bl.contains("upi txn") ||
+                          bl.contains("upi transfer") || bl.contains("upi transaction") ||
+                          bl.contains("neft/") || bl.contains("imps/") ||
+                          bl.contains("upi credited") || bl.contains("received via upi") ||
+                          bl.contains("imps") || bl.contains("neft") || bl.contains("rtgs") ||
+                          (bl.contains("upi") && (bl.contains("p2a") || bl.contains("p2m") || bl.contains("p2p")))
+        if isUPICredit { return .upi }
         return .others
     }
 
@@ -158,6 +237,7 @@ class CategoryService {
         var overrides = userOverrides
         overrides[merchant.lowercased()] = category
         userOverrides = overrides
+        learnCategory(merchant: merchant, category: category)  // persist frequency too
     }
 
     func removeOverride(merchant: String) {

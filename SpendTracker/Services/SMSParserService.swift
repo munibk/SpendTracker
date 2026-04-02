@@ -26,6 +26,17 @@ class SMSParserService {
         ]
         for kw in declineWords { if b.contains(kw) { return nil } }
 
+        // Skip CC payment-received confirmation SMS — not income from user's perspective.
+        // e.g. "Payment of Rs.5000 received for your ICICI CC xx1234. Outstanding: Rs.0."
+        // The actual debit is captured separately from the savings/current account SMS.
+        let isCCPaymentConfirmation =
+            b.contains("credit card") &&
+            (b.contains("payment received for your") ||
+             b.contains("payment of") && b.contains("received for your cc") ||
+             b.contains("payment received for cc") ||
+             b.contains("payment received on your credit card"))
+        if isCCPaymentConfirmation { return nil }
+
         guard let type   = extractTransactionType(body: smsBody) else { return nil }
         guard let amount = extractAmount(body: smsBody)           else { return nil }
 
@@ -60,19 +71,48 @@ class SMSParserService {
     // MARK: - Card Type Detection
     func detectCardType(body: String) -> CardType {
         let b = body.lowercased()
-        // NOTE: Intentionally avoid broad substrings like "cc " or "dc " because
-        // they match common abbreviations in bank SMS (e.g. "acc " for account).
-        if b.contains("credit card") ||
-           b.contains("credit card no") || b.contains("cc no") ||
-           b.contains("credit card xx") || b.contains("credit card ending") ||
-           b.contains("cc bill") || b.contains("cc payment") || b.contains("cc outstanding") {
-            return .credit
-        }
-        if b.contains("debit card") ||
-           b.contains("debit card no") || b.contains("pos purchase") ||
-           b.contains("pos debit") || b.contains("card swipe") {
-            return .debit
-        }
+        // IMPORTANT: Do NOT use bare b.contains("credit card") — Indian bank SMS
+        // footers almost always contain "credit card helpline" / "credit card
+        // customer care" even for savings-account / UPI / debit card transactions.
+        // Only use patterns that appear in the *transaction* context, not footers.
+        let creditPatterns = [
+            "your credit card",       // "your credit card xx1234 was used"
+            "yr credit card",         // abbreviated form used by some banks
+            "credit card xx",         // "credit card xx1234"
+            "credit card no",         // "credit card no. 1234"
+            "credit card ending",     // "credit card ending in 1234"
+            "credit card a/c",        // account reference
+            "credit card ac",
+            "cc no",                  // "cc no. 1234"
+            "cc bill",                // "cc bill payment"
+            "cc payment",             // "cc payment received"
+            "cc outstanding",         // "cc outstanding"
+            "credit card bill",       // "credit card bill payment"
+            "credit card statement",
+            "minimum due",            // only in CC statement alerts
+            "total due",              // only in CC statement alerts
+            "charged to your credit", // "charged to your credit card"
+            "used on your credit",    // "used on your credit card"
+        ]
+        if creditPatterns.contains(where: { b.contains($0) }) { return .credit }
+
+        // Same rule as credit: bare "debit card" appears in ALL bank email/SMS footers
+        // ("do not share your Credit/Debit Card number"). Use transaction-context patterns only.
+        let debitPatterns = [
+            "your debit card",        // "your debit card xx1234 was used"
+            "yr debit card",          // abbreviated form
+            "debit card xx",          // "debit card xx1234"
+            "debit card no",          // "debit card no. 1234"
+            "debit card ending",      // "debit card ending in 1234"
+            "debit card a/c",
+            "debit card ac",
+            "used your debit",        // "used your debit card"
+            "pos purchase",           // point-of-sale
+            "pos debit",
+            "card swipe",
+        ]
+        if debitPatterns.contains(where: { b.contains($0) }) { return .debit }
+
         return .none
     }
 
