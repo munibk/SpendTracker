@@ -29,6 +29,7 @@
 		AA000020 /* GmailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000020; };
 		AA000021 /* CreditCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000021; };
 		AA000022 /* CCBillService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000022; };
+		AA000024 /* FirestoreService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA000024; };
 
 
 /* Begin PBXFileReference section */
@@ -54,6 +55,7 @@
 		BA000020 /* GmailView.swift */           = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GmailView.swift; sourceTree = "<group>"; };
 		BA000021 /* CreditCardView.swift */      = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreditCardView.swift; sourceTree = "<group>"; };
 		BA000022 /* CCBillService.swift */        = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCBillService.swift; sourceTree = "<group>"; };
+		BA000024 /* FirestoreService.swift */     = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirestoreService.swift; sourceTree = "<group>"; };
 		BA000099 /* SpendTracker.app */         = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpendTracker.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BA000100 /* Info.plist */               = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		BA000101 /* SpendTracker.entitlements */= {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SpendTracker.entitlements; sourceTree = "<group>"; };
@@ -120,6 +122,7 @@
 				BA000018,
 				BA000019,
 				BA000022,
+				BA000024,
 			);
 			name = Services;
 			path = Services;
@@ -298,6 +301,7 @@
 				AA000020,
 				AA000021,
 				AA000022,
+				AA000024,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

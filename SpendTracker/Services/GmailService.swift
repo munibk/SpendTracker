@@ -58,7 +58,9 @@ class GmailService: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         UserDefaults.standard.string(forKey: "gmail_client_id") ?? "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
     }
     private let redirectURI   = "com.yourname.spendtracker:/oauth2callback"
-    private let scope         = "https://www.googleapis.com/auth/gmail.readonly"
+    // openid adds the id_token field to the token response, which is used
+    // to sign into Firebase Auth (required for Firestore security rules).
+    private let scope         = "https://www.googleapis.com/auth/gmail.readonly openid email"
     private let authEndpoint  = "https://accounts.google.com/o/oauth2/v2/auth"
     private let tokenEndpoint = "https://oauth2.googleapis.com/token"
     private let gmailAPI      = "https://gmail.googleapis.com/gmail/v1"
@@ -215,6 +217,7 @@ class GmailService: NSObject, ObservableObject, ASWebAuthenticationPresentationC
             guard let self, let data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { return }
+            let idToken = json["id_token"] as? String
             DispatchQueue.main.async {
                 if let a = json["access_token"]  as? String { self.accessToken  = a }
                 if let r = json["refresh_token"] as? String { self.refreshToken = r }
@@ -224,6 +227,13 @@ class GmailService: NSObject, ObservableObject, ASWebAuthenticationPresentationC
                 self.isConnected = true
                 self.fetchUserEmail()
                 self.fetchStatus = "Connected ✅"
+                // Sign into Firebase Auth so Firestore security rules can verify identity
+                if let idToken {
+                    FirestoreService.shared.signInWithGoogle(idToken: idToken) { success in
+                        if success { print("✅ Signed into Firebase Auth") }
+                        else       { print("⚠️ Firebase Auth sign-in failed — Firestore sync disabled") }
+                    }
+                }
             }
         }.resume()
     }

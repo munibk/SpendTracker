@@ -15,6 +15,8 @@ class TransactionStore: ObservableObject {
     init() {
         loadFromDisk()
         if budgets.isEmpty { setDefaultBudgets() }
+        // If this is a new device with no local data, pull from Firestore
+        loadFromFirestoreIfEmpty()
     }
 
     // MARK: - CRUD
@@ -30,6 +32,7 @@ class TransactionStore: ObservableObject {
             self.transactions.sort { $0.date > $1.date }
             self.save()
             self.regenerateReport(for: txn.date)
+            FirestoreService.shared.saveTransaction(txn)
         }
     }
 
@@ -55,6 +58,7 @@ class TransactionStore: ObservableObject {
             self.transactions[idx] = txn
             self.save()
             self.regenerateReport(for: txn.date)
+            FirestoreService.shared.saveTransaction(txn)
         }
     }
 
@@ -64,6 +68,7 @@ class TransactionStore: ObservableObject {
             self.transactions.removeAll { $0.id == id }
             self.save()
             self.regenerateReport(for: txn.date)
+            FirestoreService.shared.deleteTransaction(id: id)
         }
     }
 
@@ -73,6 +78,7 @@ class TransactionStore: ObservableObject {
             self.monthlyReports = []
             UserDefaults.standard.removeObject(forKey: self.txKey)
             UserDefaults.standard.removeObject(forKey: self.reportKey)
+            FirestoreService.shared.clearAllRemoteData()
         }
     }
 
@@ -178,6 +184,7 @@ class TransactionStore: ObservableObject {
     func setBudget(_ amount: Double, for category: SpendCategory) {
         budgets[category] = amount
         save()
+        FirestoreService.shared.saveBudgets(budgets)
     }
 
     func budgetUtilization(for category: SpendCategory, month: Date) -> Double? {
@@ -283,6 +290,38 @@ class TransactionStore: ObservableObject {
                 self.transactions   = loadedTxns
                 self.monthlyReports = loadedReports
                 self.budgets        = loadedBudgets
+            }
+        }
+    }
+
+    // Pull all transactions from Firestore when local store is empty
+    // (new device install, or after "Clear All Data").
+    // Runs ~0.5s after init so local disk load completes first.
+    private func loadFromFirestoreIfEmpty() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            guard let self, self.transactions.isEmpty,
+                  FirestoreService.shared.firebaseUID != nil else { return }
+            print("📥 Local store empty — pulling from Firestore…")
+            FirestoreService.shared.fetchAllTransactions { [weak self] txns in
+                guard let self, !txns.isEmpty else { return }
+                print("✅ Restored \(txns.count) transactions from Firestore")
+                let fresh = txns.filter { !self.isDuplicate($0) }
+                self.transactions = fresh.sorted { $0.date > $1.date }
+                self.save()
+                // Rebuild reports for every month that has transactions
+                let months = Set(fresh.map {
+                    Calendar.current.startOfDay(
+                        for: Calendar.current.date(
+                            from: Calendar.current.dateComponents([.year, .month], from: $0.date)
+                        ) ?? $0.date
+                    )
+                })
+                months.forEach { self.regenerateReport(for: $0) }
+            }
+            FirestoreService.shared.fetchBudgets { [weak self] budgets in
+                guard let self, !budgets.isEmpty else { return }
+                self.budgets = budgets
+                self.save()
             }
         }
     }
