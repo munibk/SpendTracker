@@ -26,15 +26,23 @@ class SMSParserService {
         ]
         for kw in declineWords { if b.contains(kw) { return nil } }
 
-        // Skip CC payment-received confirmation SMS — not income from user's perspective.
-        // e.g. "Payment of Rs.5000 received for your ICICI CC xx1234. Outstanding: Rs.0."
-        // The actual debit is captured separately from the savings/current account SMS.
-        let isCCPaymentConfirmation =
-            b.contains("credit card") &&
-            (b.contains("payment received for your") ||
-             b.contains("payment of") && b.contains("received for your cc") ||
-             b.contains("payment received for cc") ||
-             b.contains("payment received on your credit card"))
+        // Skip CC bill-payment confirmations — not income (keep in sync with EmailParserService).
+        let isCCPaymentConfirmation: Bool = {
+            if b.contains("refund") || b.contains("cashback") { return false }
+            let card = b.contains("credit card") || b.contains("cc bill") || b.contains("card bill") ||
+                b.contains("credit card account")
+            let pay = b.contains("payment received on your") || b.contains("payment received for your") ||
+                b.contains("payment has been received") || b.contains("we have received your payment") ||
+                b.contains("received your payment") || b.contains("thank you for your payment") ||
+                (b.contains("payment of") && b.contains("received")) ||
+                b.contains("payment towards your credit card") ||
+                (b.contains("payment towards your") && b.contains("card")) ||
+                b.contains("payment credited to your credit card") ||
+                b.contains("credited to your credit card") ||
+                b.contains("credit card bill payment") ||
+                (b.contains("credit card") && b.contains("payment received"))
+            return card && pay
+        }()
         if isCCPaymentConfirmation { return nil }
 
         guard let type   = extractTransactionType(body: smsBody) else { return nil }

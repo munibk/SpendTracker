@@ -83,6 +83,18 @@ class CategoryService {
                     bl.contains("ach mandate") || bl.contains("nach mandate")
         if isACH { return .emi }
 
+        // 1c. EMI / loan instalment debits — before UPI (email/SMS footers often mention "UPI" help lines)
+        let isEMIDebit =
+            bl.contains("loan emi") || bl.contains("loan installment") || bl.contains("installment payment") ||
+            bl.contains("equated monthly") || bl.contains("equated monthly installment") ||
+            bl.contains("loan repayment") ||
+            (bl.contains("emi") && (bl.contains("debited") || bl.contains("deducted") || bl.contains("auto debit") ||
+                                     bl.contains("nach") || bl.contains("ach") || bl.contains("mandate") ||
+                                     bl.contains("has been paid") || bl.contains("payment towards loan"))) ||
+            (bl.contains("home loan") || bl.contains("personal loan")) &&
+                (bl.contains("emi") || bl.contains("installment") || bl.contains("debited"))
+        if isEMIDebit { return .emi }
+
         // 2. UPI check FIRST — before ATM
         // Covers all major Indian bank UPI alert patterns:
         //   HDFC  : "debited by upi; ref no"

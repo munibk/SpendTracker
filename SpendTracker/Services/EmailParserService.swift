@@ -68,9 +68,12 @@ class EmailParserService {
             // Many bank emails reuse SMS wording; SMS parser patterns sometimes match when
             // email-specific regex does not. Footer lines ("not authorised…") make SMS parse
             // fail on full body — trim typical disclaimer block first.
+            let bFull = cleaned.lowercased()
+            guard !isCreditCardBillPaymentConfirmation(bFull) else { return [] }
             let forSMS = bodyTrimmingTypicalBankEmailFooter(cleaned)
             if var smsTxn = smsParser.parse(smsBody: forSMS, sender: sender) {
                 if let ed = extractDate(body: cleaned) { smsTxn.date = ed }
+                if smsTxn.type == .credit, isCreditCardBillPaymentConfirmation(bFull) { return [] }
                 return [smsTxn]
             }
             return []
@@ -96,6 +99,38 @@ class EmailParserService {
             return unique
         }
         return results
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // MARK: Credit card bill payment (exclude from transactions)
+    // ─────────────────────────────────────────────────────────
+    /// True for "your card bill payment was received" style alerts — not income (the debit is on the bank a/c).
+    private func isCreditCardBillPaymentConfirmation(_ b: String) -> Bool {
+        if b.contains("refund") || b.contains("cashback") { return false }
+
+        let cardCtx = b.contains("credit card") || b.contains("cc bill") || b.contains("card bill") ||
+            b.contains("credit card account")
+
+        let billPay =
+            b.contains("payment received on your") ||
+            b.contains("payment received for your") ||
+            b.contains("payment has been received") ||
+            b.contains("we have received your payment") ||
+            b.contains("received your payment") ||
+            b.contains("thank you for your payment") ||
+            b.contains("thank you for the payment") ||
+            (b.contains("payment of") && b.contains("received")) ||
+            (b.contains("payment of") && b.contains("has been received")) ||
+            b.contains("payment towards your credit card") ||
+            (b.contains("payment towards your") && b.contains("card")) ||
+            b.contains("payment credited to your credit card") ||
+            (b.contains("credited to your credit card") && !b.contains("cashback")) ||
+            b.contains("your credit card payment has been received") ||
+            b.contains("credit card bill payment") ||
+            (b.contains("bill payment") && b.contains("credit card")) ||
+            (b.contains("credit card") && b.contains("payment received"))
+
+        return cardCtx && billPay
     }
 
     // ─────────────────────────────────────────────────────────
@@ -130,19 +165,10 @@ class EmailParserService {
                         "transferred", "mandate", "ach", "nach"]
         guard txnWords.contains(where: { b.contains($0) }) else { return nil }
 
-        // ── Reject CC payment-received confirmation emails ────────────────
-        // e.g. subject "Payment received on your ICICI Bank Credit Card"
-        // From the user's perspective these are NOT income — they are outgoing
-        // payments already captured as a debit from the savings-account SMS/email.
-        // CCBillService processes these separately to update bill status.
-        let isCCPaymentConfirmation =
-            b.contains("credit card") &&
-            (b.contains("payment received on your") ||
-             b.contains("payment of") && b.contains("has been received") ||
-             b.contains("we have received your payment") ||
-             b.contains("payment towards your credit card") ||
-             b.contains("payment credited to your credit card"))
-        if isCCPaymentConfirmation { return nil }
+        // ── Reject CC bill-payment confirmations (not income / not card spend) ─────
+        // Banks word these many ways; "payment received" + card context often mis-read as credit.
+        // CCBillService tracks bill status from these separately.
+        if isCreditCardBillPaymentConfirmation(b) { return nil }
 
         guard let amount = extractAmount(body: cleaned) else { return nil }
         guard let type   = extractType(body: cleaned)   else { return nil }
