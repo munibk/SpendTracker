@@ -46,6 +46,20 @@ class FirestoreService: ObservableObject {
     private var firebaseIDToken: String?
     private var firebaseTokenExpiry: Date?
 
+    /// Google JSON often returns `expires_in` / `expiresIn` as a number; parsing only `String` breaks hourly refresh.
+    private func secondsFromExpiresField(_ value: Any?) -> Double? {
+        if let s = value as? String, let d = Double(s) { return d }
+        if let i = value as? Int { return Double(i) }
+        if let d = value as? Double { return d }
+        if let n = value as? NSNumber { return n.doubleValue }
+        return nil
+    }
+
+    /// Coalesces concurrent `validFirebaseToken` calls into a single refresh.
+    private let firebaseTokenGate = DispatchQueue(label: "SpendTracker.FirestoreService.firebaseToken")
+    private var isRefreshingFirebaseToken = false
+    private var firebaseTokenWaiters: [(String?) -> Void] = []
+
     // ── In-app debug log (last 50 entries) ────────────────
     @Published var debugLogs: [String] = []
     private func log(_ msg: String) {
@@ -112,10 +126,10 @@ class FirestoreService: ObservableObject {
                 self.log("signInWithGoogle: ❌ Firebase error: \(errMsg)")
                 DispatchQueue.main.async { completion(false) }; return
             }
-            guard let uid  = json["localId"]   as? String,
-                  let idt  = json["idToken"]   as? String,
-                  let exp  = json["expiresIn"] as? String,
-                  let secs = Double(exp)
+            guard let uid  = json["localId"]      as? String,
+                  let idt  = json["idToken"]      as? String,
+                  let rft  = json["refreshToken"] as? String,
+                  let secs = self.secondsFromExpiresField(json["expiresIn"])
             else {
                 self.log("signInWithGoogle: ❌ missing fields in response: \(json.keys.joined(separator:","))")
                 DispatchQueue.main.async { completion(false) }; return
@@ -129,6 +143,7 @@ class FirestoreService: ObservableObject {
             UserDefaults.standard.set(uid,    forKey: "firebase_uid")
             UserDefaults.standard.set(expiry, forKey: "firebase_token_expiry")
             AppKeychain.save(idt, key: "firebase_id_token")
+            AppKeychain.save(rft, key: "firebase_refresh_token")   // ← save Firebase refresh token
             self.log("signInWithGoogle: ✅ signed in, uid=\(uid)")
 
             DispatchQueue.main.async {
@@ -138,8 +153,8 @@ class FirestoreService: ObservableObject {
         }.resume()
     }
 
-    // ── Refresh Firebase token using a Google refresh_token ──
-    func refreshFirebaseToken(googleRefreshToken: String, completion: @escaping (Bool) -> Void) {
+    // ── Refresh Firebase ID token using the Firebase refresh token ──
+    func refreshFirebaseToken(firebaseRefreshToken: String, completion: @escaping (Bool) -> Void) {
         guard !apiKey.isEmpty else { completion(false); return }
 
         let url = URL(string:
@@ -147,15 +162,14 @@ class FirestoreService: ObservableObject {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        req.httpBody = "grant_type=refresh_token&refresh_token=\(googleRefreshToken)"
+        req.httpBody = "grant_type=refresh_token&refresh_token=\(firebaseRefreshToken)"
             .data(using: .utf8)
 
         session.dataTask(with: req) { [weak self] data, _, error in
             guard let self, let data, error == nil,
-                  let json   = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let idt    = json["id_token"] as? String,
-                  let expStr = json["expires_in"] as? String,
-                  let secs   = Double(expStr)
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let idt  = json["id_token"] as? String,
+                  let secs = self.secondsFromExpiresField(json["expires_in"])
             else { DispatchQueue.main.async { completion(false) }; return }
 
             let expiry = Date().addingTimeInterval(secs - 60)
@@ -163,6 +177,9 @@ class FirestoreService: ObservableObject {
             self.firebaseTokenExpiry = expiry
             UserDefaults.standard.set(expiry, forKey: "firebase_token_expiry")
             AppKeychain.save(idt, key: "firebase_id_token")
+            if let newRft = json["refresh_token"] as? String {
+                AppKeychain.save(newRft, key: "firebase_refresh_token")
+            }
 
             DispatchQueue.main.async { completion(true) }
         }.resume()
@@ -170,18 +187,44 @@ class FirestoreService: ObservableObject {
 
     // ── Ensures we have a valid token before every request ──
     func validFirebaseToken(completion: @escaping (String?) -> Void) {
-        if let expiry = firebaseTokenExpiry,
-           Date() < expiry,
-           let token = firebaseIDToken {
-            completion(token); return
-        }
-        log("validFirebaseToken: token expired, refreshing…")
-        guard let googleRefresh = AppKeychain.read("refresh_token") else {
-            log("validFirebaseToken: ❌ no Google refresh_token in Keychain")
-            completion(nil); return
-        }
-        refreshFirebaseToken(googleRefreshToken: googleRefresh) { [weak self] success in
-            completion(success ? self?.firebaseIDToken : nil)
+        firebaseTokenGate.async { [weak self] in
+            guard let self else {
+                completion(nil)
+                return
+            }
+            if let expiry = self.firebaseTokenExpiry,
+               Date() < expiry,
+               let token = self.firebaseIDToken {
+                completion(token)
+                return
+            }
+            self.firebaseTokenWaiters.append(completion)
+            guard !self.isRefreshingFirebaseToken else { return }
+            self.isRefreshingFirebaseToken = true
+            self.log("validFirebaseToken: token expired or missing, refreshing…")
+            guard let firebaseRefresh = AppKeychain.read("firebase_refresh_token") else {
+                self.log("validFirebaseToken: ❌ no Firebase refresh_token — user must sign in again")
+                let waiters = self.firebaseTokenWaiters
+                self.firebaseTokenWaiters = []
+                self.isRefreshingFirebaseToken = false
+                waiters.forEach { $0(nil) }
+                return
+            }
+            self.refreshFirebaseToken(firebaseRefreshToken: firebaseRefresh) { [weak self] success in
+                guard let self else { return }
+                self.firebaseTokenGate.async {
+                    if success {
+                        self.log("validFirebaseToken: ✅ token refreshed")
+                    } else {
+                        self.log("validFirebaseToken: ❌ refresh failed")
+                    }
+                    let token = success ? self.firebaseIDToken : nil
+                    let waiters = self.firebaseTokenWaiters
+                    self.firebaseTokenWaiters = []
+                    self.isRefreshingFirebaseToken = false
+                    waiters.forEach { $0(token) }
+                }
+            }
         }
     }
 
@@ -346,6 +389,7 @@ class FirestoreService: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "firebase_uid")
         UserDefaults.standard.removeObject(forKey: "firebase_token_expiry")
         AppKeychain.delete("firebase_id_token")
+        AppKeychain.delete("firebase_refresh_token")
         DispatchQueue.main.async { self.isConfigured = false }
     }
 
