@@ -65,6 +65,14 @@ class EmailParserService {
             if let txn = parse(emailBody: cleaned, sender: sender, date: date) {
                 return [txn]
             }
+            // Many bank emails reuse SMS wording; SMS parser patterns sometimes match when
+            // email-specific regex does not. Footer lines ("not authorised…") make SMS parse
+            // fail on full body — trim typical disclaimer block first.
+            let forSMS = bodyTrimmingTypicalBankEmailFooter(cleaned)
+            if var smsTxn = smsParser.parse(smsBody: forSMS, sender: sender) {
+                if let ed = extractDate(body: cleaned) { smsTxn.date = ed }
+                return [smsTxn]
+            }
             return []
         }
 
@@ -114,9 +122,12 @@ class EmailParserService {
             if b.contains(kw) { return nil }
         }
 
-        // Must look like a transaction email
-        let txnWords = ["debited","credited","transaction","payment",
-                        "inr","rs.","rs ","₹","used for","amount"]
+        // Must look like a transaction email (gate before amount/type — reduces noise, but
+        // missing keywords here drops real alerts; keep in sync with common bank templates).
+        let txnWords = ["debited", "credited", "transaction", "payment", "txn",
+                        "inr", "rs.", "rs ", "₹", "used for", "amount",
+                        "upi", "imps", "neft", "rtgs", "spent", "withdrawn", "purchase",
+                        "transferred", "mandate", "ach", "nach"]
         guard txnWords.contains(where: { b.contains($0) }) else { return nil }
 
         // ── Reject CC payment-received confirmation emails ────────────────
@@ -177,6 +188,9 @@ class EmailParserService {
         let patterns: [(String, NSRegularExpression.Options)] = [
             // Multi-line Axis: "Amount Credited:\nINR 1.00"
             (#"[Aa]mount\s*(?:[Dd]ebited|[Cc]redited)\s*[:\-]?\s*\n\s*(?:INR|Rs\.?|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)"#, .dotMatchesLineSeparators),
+            // SMS-style: "debited Rs.500" / "spent INR 200" (same order as SMSParser)
+            (#"(?:debited|credited|spent|withdrawn|paid)\s+(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)"#, .caseInsensitive),
+            (#"(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)\s+(?:debited|credited|spent)"#, .caseInsensitive),
             // "credited/debited with INR 2213.00" — Axis NEFT, SBI
             (#"(?:credited|debited)\s+with\s+(?:INR|Rs\.?|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)"#, []),
             // ICICI: "a transaction of INR 139.00" — high priority before generic INR
@@ -563,6 +577,25 @@ class EmailParserService {
         return t.split(separator: " ")
                 .map { $0.prefix(1).uppercased() + $0.dropFirst().lowercased() }
                 .joined(separator: " ")
+    }
+
+    /// Strips trailing disclaimer/footer so `SMSParserService` does not reject the body for
+    /// phrases like "not authorised" that appear in successful txn emails.
+    private func bodyTrimmingTypicalBankEmailFooter(_ text: String) -> String {
+        let lines = text.components(separatedBy: "\n")
+        var kept: [String] = []
+        for line in lines {
+            let l = line.lowercased().trimmingCharacters(in: .whitespaces)
+            if l.hasPrefix("if you have not") || l.hasPrefix("if this transaction") ||
+                l.hasPrefix("if you did not") || l.hasPrefix("if this was not") {
+                break
+            }
+            if l.hasPrefix("disclaimer") || l == "regards" || l.hasPrefix("regards,") { break }
+            if l.hasPrefix("team —") || l.hasPrefix("team -") || l.hasPrefix("thanks,") { break }
+            kept.append(line)
+        }
+        let joined = kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return joined.isEmpty ? text : joined
     }
 
     private func cleanText(_ text: String) -> String {

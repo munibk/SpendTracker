@@ -503,7 +503,8 @@ class GmailService: NSObject, ObservableObject, ASWebAuthenticationPresentationC
     // ─────────────────────────────────────────────────────
     // MARK: Email Extraction
     // Recursively walks the MIME tree.
-    // Priority: text/plain > text/html > any nested text.
+    // multipart/alternative: many banks send a short useless text/plain ("View in browser")
+    // and put the real alert in text/html — we pick plain vs HTML by length + bank-keyword score.
     // This handles all common Gmail structures:
     //   multipart/alternative → [text/plain, text/html]
     //   multipart/mixed → [multipart/alternative, image/inline, ...]
@@ -512,6 +513,54 @@ class GmailService: NSObject, ObservableObject, ASWebAuthenticationPresentationC
     private func extractEmailContent(from json: [String: Any]) -> String {
         guard let payload = json["payload"] as? [String: Any] else { return "" }
         return extractTextFromPart(payload)
+    }
+
+    /// How much this chunk looks like an Indian bank alert (used to prefer HTML over stub plain).
+    private func bankAlertSignalScore(_ text: String) -> Int {
+        let b = text.lowercased()
+        var s = 0
+        for n in ["debited", "credited", "inr", "rs.", "rs ", "₹", "upi", "imps", "neft",
+                  "transaction", "a/c", "acct", "account", "available bal", "avl bal"] {
+            if b.contains(n) { s += 1 }
+        }
+        return s
+    }
+
+    private func chooseBestAlternativeBody(plain: String, html: String) -> String {
+        let p = plain.trimmingCharacters(in: .whitespacesAndNewlines)
+        let h = html.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sp = bankAlertSignalScore(p)
+        let sh = bankAlertSignalScore(h)
+        if sh > sp && h.count > 40 { return html }
+        if sp > sh && p.count > 40 { return plain }
+        if p.count >= 100 { return plain }
+        if h.count > p.count { return html }
+        return p.isEmpty ? html : plain
+    }
+
+    /// Gathers longest plain + HTML strings under a MIME subtree (nested alternative/related).
+    private func collectPlainAndHTML(from parts: [[String: Any]]) -> (plain: String, html: String) {
+        var bestPlain = ""
+        var bestHTML  = ""
+        for sub in parts {
+            let mime = sub["mimeType"] as? String ?? ""
+            if mime == "text/plain",
+               let body = sub["body"] as? [String: Any],
+               let data = body["data"] as? String {
+                let t = decodeBase64(data, isHTML: false)
+                if t.count > bestPlain.count { bestPlain = t }
+            } else if mime == "text/html",
+                      let body = sub["body"] as? [String: Any],
+                      let data = body["data"] as? String {
+                let t = decodeBase64(data, isHTML: true)
+                if t.count > bestHTML.count { bestHTML = t }
+            } else if let nested = sub["parts"] as? [[String: Any]] {
+                let (bp, bh) = collectPlainAndHTML(from: nested)
+                if bp.count > bestPlain.count { bestPlain = bp }
+                if bh.count > bestHTML.count { bestHTML = bh }
+            }
+        }
+        return (bestPlain, bestHTML)
     }
 
     private func extractTextFromPart(_ part: [String: Any]) -> String {
@@ -536,12 +585,10 @@ class GmailService: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         // ── Multipart: recurse into children ──────────────
         guard let parts = part["parts"] as? [[String: Any]] else { return "" }
 
-        // For multipart/alternative prefer text/plain first
         if mime == "multipart/alternative" {
-            for sub in parts where (sub["mimeType"] as? String) == "text/plain" {
-                let t = extractTextFromPart(sub)
-                if !t.isEmpty { return t }
-            }
+            let (p, h) = collectPlainAndHTML(from: parts)
+            let chosen = chooseBestAlternativeBody(plain: p, html: h)
+            if !chosen.isEmpty { return chosen }
         }
         // Fallback: first child that yields non-empty text
         for sub in parts {
