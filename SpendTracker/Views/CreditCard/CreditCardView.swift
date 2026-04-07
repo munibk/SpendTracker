@@ -3,10 +3,7 @@ import SwiftUI
 // MARK: - Credit Card View
 struct CreditCardView: View {
     @EnvironmentObject var store: TransactionStore
-    @ObservedObject private var billService = CCBillService.shared
     @State private var selectedMonth: Date = Date()
-    @State private var showMarkPaidSheet = false
-    @State private var markPaidRecord: CCBillRecord? = nil
 
     // Transactions made *using* a credit card in the selected month
     private var ccPurchases: [Transaction] {
@@ -34,38 +31,6 @@ struct CreditCardView: View {
         ccBillPayments.reduce(0) { $0 + $1.amount }
     }
 
-    // Spend grouped by bank name (lowercased) — used to enrich bill status cards
-    // when no statement email has been parsed yet.
-    private var spendByBankKey: [String: Double] {
-        var map: [String: Double] = [:]
-        for t in ccPurchases {
-            map[t.bankName.lowercased(), default: 0] += t.amount
-        }
-        return map
-    }
-
-    // ── Bill-service aggregates (source of truth for Outstanding / Paid) ───────
-    // When CCBillService has parsed a statement email, totalDue > 0 → use it.
-    // Otherwise fall back to transaction-based numbers so the UI is never blank.
-    private var hasBillServiceStatements: Bool {
-        billRecordsForDisplay.contains { $0.totalDue > 0 }
-    }
-    private var aggregateBillDue: Double {
-        billRecordsForDisplay.reduce(0) { $0 + $1.totalDue }
-    }
-    private var aggregateBillPaid: Double {
-        let s = billRecordsForDisplay.reduce(0) { $0 + $1.totalPaid }
-        // Fall back to savings-account debit transactions tagged .creditCard
-        return s > 0 ? s : totalBillPaid
-    }
-    private var aggregateOutstanding: Double {
-        if hasBillServiceStatements {
-            return billRecordsForDisplay.reduce(0) { $0 + $1.outstanding }
-        }
-        // No statement yet: total CC spend this month will become the next bill
-        return totalCCSpend
-    }
-
     // Per-card spending breakdown grouped by bank + last4
     private var perCardBreakdown: [(label: String, amount: Double, count: Int)] {
         var map: [String: (amount: Double, count: Int)] = [:]
@@ -88,31 +53,12 @@ struct CreditCardView: View {
             .sorted { $0.amount > $1.amount }
     }
 
-    // Bill records: latest-period record per card, plus any records in selected billing month
-    private var billRecordsForDisplay: [CCBillRecord] {
-        // Show records whose billing month matches the selected month,
-        // plus the latest record for any card not already represented.
-        let monthRecords = billService.records(for: selectedMonth)
-        var shown = Set(monthRecords.map { $0.matchKey })
-        var result = monthRecords
-        for r in billService.latestPerCard {
-            if !shown.contains(r.matchKey) {
-                result.append(r)
-                shown.insert(r.matchKey)
-            }
-        }
-        return result.sorted { ($0.bank + $0.cardName) < ($1.bank + $1.cardName) }
-    }
-
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 20) {
                     monthPicker
                     summaryCards
-                    if !billRecordsForDisplay.isEmpty {
-                        billStatusSection
-                    }
                     if perCardBreakdown.count > 1 {
                         perCardSection
                     }
@@ -124,9 +70,6 @@ struct CreditCardView: View {
                 .padding()
             }
             .navigationTitle("Credit Card")
-            .sheet(item: $markPaidRecord) { record in
-                MarkPaidSheet(record: record)
-            }
         }
     }
 
@@ -152,7 +95,6 @@ struct CreditCardView: View {
     // MARK: - Summary Cards
     private var summaryCards: some View {
         VStack(spacing: 12) {
-            // Large card for total CC spend
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Image(systemName: "creditcard.fill")
@@ -178,51 +120,23 @@ struct CreditCardView: View {
                     .stroke(Color(hex: "#E74C3C").opacity(0.2), lineWidth: 1)
             )
 
-            // Secondary row
             HStack(spacing: 12) {
                 SummaryCard(
                     title:  "Bill Paid",
-                    amount: aggregateBillPaid,
+                    amount: totalBillPaid,
                     icon:   "arrow.up.circle.fill",
                     color:  Color(hex: "#E67E22")
                 )
                 SummaryCard(
-                    title:  hasBillServiceStatements ? "Outstanding" : "Est. Next Bill",
-                    amount: aggregateOutstanding,
+                    title:  "Est. Next Bill",
+                    amount: totalCCSpend,
                     icon:   "exclamationmark.circle.fill",
-                    color:  aggregateOutstanding > 0
+                    color:  totalCCSpend > 0
                               ? Color(hex: "#E74C3C")
                               : Color(hex: "#3CB371")
                 )
             }
         }
-    }
-
-    // MARK: - Bill Status Section
-    // Shows one card per known CC — statement amount, due date, and paid/unpaid status.
-    private var billStatusSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Bill Status")
-                    .font(.headline)
-                Spacer()
-                Text("\(billRecordsForDisplay.count) card\(billRecordsForDisplay.count == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            ForEach(billRecordsForDisplay) { record in
-                BillStatusCard(
-                    record: record,
-                    spentOnCard: spendByBankKey[record.bank.lowercased()] ?? 0
-                ) {
-                    markPaidRecord = record
-                }
-            }
-        }
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(16)
     }
 
     // MARK: - Per Card Breakdown
@@ -340,7 +254,6 @@ struct CreditCardView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 30)
             } else {
-                // Group by section: CC Purchases and Bill Payments
                 if !ccPurchases.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Label("CC Purchases", systemImage: "cart.fill")
@@ -388,246 +301,3 @@ struct CreditCardView: View {
         }
     }
 }
-
-// MARK: - Bill Status Card
-// Displays one CC bill record: statement period, total due, status chip, payments.
-// spentOnCard: actual CC purchase spend from transactions for this bank this month —
-// used as a fallback when no statement email has been parsed yet.
-private struct BillStatusCard: View {
-    let record:      CCBillRecord
-    let spentOnCard: Double     // from ccPurchases grouped by bank
-    let onMarkPaid:  () -> Void
-
-    private let dateF: DateFormatter = {
-        let f = DateFormatter(); f.dateFormat = "MMM d, yyyy"; return f
-    }()
-    private let shortMonthF: DateFormatter = {
-        let f = DateFormatter(); f.dateFormat = "MMM yyyy"; return f
-    }()
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // ── Header: card name + bank + status chip ──────
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    if record.cardName.isEmpty {
-                        Text(record.bank)
-                            .font(.subheadline).fontWeight(.semibold)
-                    } else {
-                        Text(record.cardName)
-                            .font(.subheadline).fontWeight(.semibold)
-                        Text(record.bank)
-                            .font(.caption).foregroundColor(.secondary)
-                    }
-                    // Billing period
-                    if let start = record.periodStart, let end = record.periodEnd {
-                        Text("\(dateF.string(from: start)) – \(dateF.string(from: end))")
-                            .font(.caption2).foregroundColor(.secondary)
-                    } else {
-                        Text(shortMonthF.string(from: record.billingMonth))
-                            .font(.caption2).foregroundColor(.secondary)
-                    }
-                }
-                Spacer()
-                // Status chip
-                HStack(spacing: 4) {
-                    Image(systemName: record.status.icon)
-                    Text(record.status.label)
-                        .font(.caption).fontWeight(.semibold)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(record.status.color.opacity(0.15))
-                .foregroundColor(record.status.color)
-                .cornerRadius(20)
-            }
-
-            Divider()
-
-            // ── Amounts grid ────────────────────────────────
-            if record.totalDue > 0 {
-                // Statement data available — show full bill info
-                HStack(spacing: 0) {
-                    amountCell(title: "Total Due",
-                               value: "₹\(Int(record.totalDue).formatted())",
-                               color: .primary)
-                    Spacer()
-                    amountCell(title: "Min. Due",
-                               value: record.minimumDue > 0 ? "₹\(Int(record.minimumDue).formatted())" : "—",
-                               color: .secondary)
-                    Spacer()
-                    amountCell(title: "Paid",
-                               value: record.totalPaid > 0 ? "₹\(Int(record.totalPaid).formatted())" : "—",
-                               color: record.totalPaid > 0 ? Color(hex: "#2ECC71") : .secondary)
-                }
-            } else if spentOnCard > 0 {
-                // No statement yet — show actual transaction spend as reference
-                HStack(spacing: 0) {
-                    amountCell(title: "Spent This Month",
-                               value: "₹\(Int(spentOnCard).formatted())",
-                               color: Color(hex: "#E74C3C"))
-                    Spacer()
-                    amountCell(title: "Statement",
-                               value: "Pending",
-                               color: .secondary)
-                    Spacer()
-                    amountCell(title: "Paid",
-                               value: record.totalPaid > 0 ? "₹\(Int(record.totalPaid).formatted())" : "—",
-                               color: record.totalPaid > 0 ? Color(hex: "#2ECC71") : .secondary)
-                }
-            } else {
-                HStack(spacing: 0) {
-                    amountCell(title: "Total Due", value: "—", color: .secondary)
-                    Spacer()
-                    amountCell(title: "Min. Due",  value: "—", color: .secondary)
-                    Spacer()
-                    amountCell(title: "Paid",      value: "—", color: .secondary)
-                }
-            }
-
-            // ── Outstanding warning ─────────────────────────
-            if record.status == .unpaid || record.status == .partiallyPaid {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(record.status.color)
-                        .font(.caption)
-                    Text(record.status == .unpaid
-                         ? "Bill unpaid — ₹\(Int(record.totalDue).formatted()) due"
-                         : "Partial payment — ₹\(Int(record.outstanding).formatted()) still outstanding")
-                        .font(.caption)
-                        .foregroundColor(record.status.color)
-                    Spacer()
-                }
-            }
-
-            // ── Due date ────────────────────────────────────
-            if let due = record.dueDate {
-                let isOverdue = due < Date() && record.status != .paid
-                HStack(spacing: 4) {
-                    Image(systemName: "calendar.badge.exclamationmark")
-                        .font(.caption2)
-                        .foregroundColor(isOverdue ? .red : .secondary)
-                    Text("Due: \(dateF.string(from: due))")
-                        .font(.caption2)
-                        .foregroundColor(isOverdue ? .red : .secondary)
-                    if isOverdue { Text("OVERDUE").font(.caption2).fontWeight(.bold).foregroundColor(.red) }
-                }
-            }
-
-            // ── Payment history ─────────────────────────────
-            if !record.payments.isEmpty {
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(record.payments, id: \.date) { p in
-                        HStack {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(Color(hex: "#2ECC71"))
-                                .font(.caption2)
-                            Text("₹\(Int(p.amount).formatted()) received on \(dateF.string(from: p.date))")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-            }
-
-            // ── Mark as Paid button (only when unpaid/partial) ─
-            if record.status == .unpaid || record.status == .partiallyPaid {
-                Button(action: onMarkPaid) {
-                    Label("Mark as Paid", systemImage: "checkmark.circle")
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                        .background(Color(hex: "#2ECC71").opacity(0.12))
-                        .foregroundColor(Color(hex: "#2ECC71"))
-                        .cornerRadius(8)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(12)
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(record.status.color.opacity(0.3), lineWidth: 1)
-        )
-    }
-
-    private func amountCell(title: String, value: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.caption2).foregroundColor(.secondary)
-            Text(value).font(.subheadline).fontWeight(.semibold).foregroundColor(color)
-        }
-    }
-}
-
-// MARK: - Mark Paid Sheet
-// Lets the user manually log a payment when no confirmation email was found.
-private struct MarkPaidSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    let record: CCBillRecord
-
-    @State private var amountText = ""
-    @State private var paymentDate = Date()
-
-    var body: some View {
-        NavigationView {
-            Form {
-                Section(header: Text("Card")) {
-                    if !record.cardName.isEmpty {
-                        Text("\(record.cardName) – \(record.bank)")
-                    } else {
-                        Text(record.bank)
-                    }
-                    Text("Bill: \(record.billingMonth.monthYearString)")
-                        .foregroundColor(.secondary)
-                    if record.totalDue > 0 {
-                        Text("Total Due: ₹\(Int(record.totalDue).formatted())")
-                            .foregroundColor(Color(hex: "#E74C3C"))
-                    }
-                }
-
-                Section(header: Text("Payment Details")) {
-                    HStack {
-                        Text("₹").foregroundColor(.secondary)
-                        TextField(record.totalDue > 0
-                                  ? "\(Int(record.totalDue))"
-                                  : "Amount paid",
-                                  text: $amountText)
-                            .keyboardType(.decimalPad)
-                    }
-                    DatePicker("Payment Date", selection: $paymentDate, displayedComponents: .date)
-                }
-            }
-            .navigationTitle("Mark as Paid")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        let amount = Double(amountText)
-                            ?? record.totalDue
-                        if amount > 0 {
-                            CCBillService.shared.markPaid(
-                                recordID: record.id,
-                                amount: amount,
-                                on: paymentDate
-                            )
-                        }
-                        dismiss()
-                    }
-                    .disabled(amountText.isEmpty && record.totalDue == 0)
-                }
-            }
-            .onAppear {
-                if record.totalDue > 0 {
-                    amountText = "\(Int(record.totalDue))"
-                }
-            }
-        }
-    }
-}
-

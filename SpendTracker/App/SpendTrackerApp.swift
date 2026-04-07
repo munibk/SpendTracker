@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import BackgroundTasks
 
 @main
@@ -20,6 +21,15 @@ struct SpendTrackerApp: App {
                     smsService.configure(store: store)
                     smsService.startMonitoring()
                     scheduleBackgroundRefresh()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                    scheduleBackgroundRefresh()
+                    guard GmailService.shared.isConnected, !GmailService.shared.isFetching else { return }
+                    let interval: TimeInterval = 15 * 60
+                    let needsFetch = GmailService.shared.lastFetchDate.map { Date().timeIntervalSince($0) >= interval } ?? true
+                    if needsFetch {
+                        GmailService.shared.fetchBankEmails(store: store) { _ in }
+                    }
                 }
                 .onOpenURL { url in
                     handleIncomingURL(url)
