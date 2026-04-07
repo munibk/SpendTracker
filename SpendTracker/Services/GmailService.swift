@@ -95,7 +95,15 @@ class GmailService: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         if fullRescan || incrementalAfterEpoch == 0 {
             return "\(base) after:\(configuredStartYear)/01/01"
         }
-        let date = Date(timeIntervalSince1970: incrementalAfterEpoch)
+        var date = Date(timeIntervalSince1970: incrementalAfterEpoch)
+        // Overlap a few days: `after:` is exclusive of older mail — without overlap, anything
+        // received before the previous fetch's end time never appears in the next search
+        // (e.g. Axis ACH debit from yesterday missed after fetching today).
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC") ?? .current
+        if let rewound = cal.date(byAdding: .day, value: -4, to: date) {
+            date = rewound
+        }
         let fmt  = DateFormatter()
         fmt.dateFormat = "yyyy/MM/dd"
         fmt.timeZone   = TimeZone(identifier: "UTC")
@@ -455,14 +463,26 @@ class GmailService: NSObject, ObservableObject, ASWebAuthenticationPresentationC
                     let date    = Date(timeIntervalSince1970: (Double(dateMs) ?? 0) / 1000)
                     let full    = subject + "\n" + body
 
-                    // Mark processed regardless of parse result so non-transaction
-                    // emails (e.g. account summaries) aren't retried every time.
-                    UserDefaults.standard.set(true, forKey: processedKey)
-
                     let txns = parser.parseAll(emailBody: full, sender: sender, date: date)
                     if !txns.isEmpty {
                         DispatchQueue.main.async { txns.forEach { store.addTransaction($0) } }
                         lock.lock(); count += txns.count; lock.unlock()
+                    }
+
+                    // Mark processed so we don't re-download forever — except when the mail
+                    // looks like a txn alert but parsing failed (empty MIME body, parser gap).
+                    let trimmed = full.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let low     = full.lowercased()
+                    let score   = self.bankAlertSignalScore(full)
+                    let subj    = subject.lowercased()
+                    let subjectTxnCue = subj.contains("transaction alert") || subj.contains("debited") ||
+                        subj.contains("credited") || subj.contains("inr") || subj.contains("upi txn")
+                    let bodyMoneyCue = ["inr", "rs.", "rs ", "₹", "debited", "credited", "ach-dr", "nach "]
+                        .contains(where: { low.contains($0) })
+                    let looksLikeTxnMailButUnparsed = txns.isEmpty && !trimmed.isEmpty && score >= 3 &&
+                        (bodyMoneyCue || subjectTxnCue)
+                    if trimmed.isEmpty || !txns.isEmpty || !looksLikeTxnMailButUnparsed {
+                        UserDefaults.standard.set(true, forKey: processedKey)
                     }
 
                     // Track CC bill statement and payment-confirmation emails
@@ -519,8 +539,9 @@ class GmailService: NSObject, ObservableObject, ASWebAuthenticationPresentationC
     private func bankAlertSignalScore(_ text: String) -> Int {
         let b = text.lowercased()
         var s = 0
-        for n in ["debited", "credited", "inr", "rs.", "rs ", "₹", "upi", "imps", "neft",
-                  "transaction", "a/c", "acct", "account", "available bal", "avl bal"] {
+        for n in ["debited", "debit", "credited", "credit", "inr", "rs.", "rs ", "₹", "upi", "imps", "neft",
+                  "transaction", "a/c", "acct", "account", "available bal", "avl bal",
+                  "ach", "nach", "bank", "alert"] {
             if b.contains(n) { s += 1 }
         }
         return s
