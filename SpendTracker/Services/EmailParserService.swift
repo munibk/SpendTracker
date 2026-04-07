@@ -8,6 +8,22 @@ class EmailParserService {
     private init() {}
     private let smsParser = SMSParserService.shared
 
+    // Thread-safe regex cache — compiles each unique pattern once, reuses on all
+    // subsequent calls. A single email parse hits 25+ patterns; caching cuts the
+    // NSRegularExpression allocation cost to ~zero after the first parse.
+    private static var _regexCache: [String: NSRegularExpression] = [:]
+    private static let _cacheLock  = NSLock()
+    private static func re(_ pattern: String,
+                           _ options: NSRegularExpression.Options = []) -> NSRegularExpression? {
+        let key = "\(options.rawValue)|\(pattern)"
+        _cacheLock.lock(); defer { _cacheLock.unlock() }
+        if let cached = _regexCache[key] { return cached }
+        guard let compiled = try? NSRegularExpression(pattern: pattern, options: options)
+        else { return nil }
+        _regexCache[key] = compiled
+        return compiled
+    }
+
     // ─────────────────────────────────────────────────────────
     // MARK: Multi-Transaction Entry Point
     // Some bank emails contain multiple transactions in one email
@@ -29,9 +45,9 @@ class EmailParserService {
 
         var chunks: [String] = []
         for pattern in splitPatterns {
-            if let re = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
+            if let compiled = Self.re(pattern, .caseInsensitive) {
                 let range   = NSRange(cleaned.startIndex..., in: cleaned)
-                let matches = re.matches(in: cleaned, range: range)
+                let matches = compiled.matches(in: cleaned, range: range)
                 if matches.count > 1 {
                     // Found multiple transaction blocks — split on them
                     var positions = matches.map { Range($0.range, in: cleaned)!.lowerBound }
@@ -48,6 +64,17 @@ class EmailParserService {
         if chunks.isEmpty {
             if let txn = parse(emailBody: cleaned, sender: sender, date: date) {
                 return [txn]
+            }
+            // Many bank emails reuse SMS wording; SMS parser patterns sometimes match when
+            // email-specific regex does not. Footer lines ("not authorised…") make SMS parse
+            // fail on full body — trim typical disclaimer block first.
+            let bFull = cleaned.lowercased()
+            guard !isCreditCardBillPaymentConfirmation(bFull) else { return [] }
+            let forSMS = bodyTrimmingTypicalBankEmailFooter(cleaned)
+            if var smsTxn = smsParser.parse(smsBody: forSMS, sender: sender) {
+                if let ed = extractDate(body: cleaned) { smsTxn.date = ed }
+                if smsTxn.type == .credit, isCreditCardBillPaymentConfirmation(bFull) { return [] }
+                return [smsTxn]
             }
             return []
         }
@@ -75,6 +102,38 @@ class EmailParserService {
     }
 
     // ─────────────────────────────────────────────────────────
+    // MARK: Credit card bill payment (exclude from transactions)
+    // ─────────────────────────────────────────────────────────
+    /// True for "your card bill payment was received" style alerts — not income (the debit is on the bank a/c).
+    private func isCreditCardBillPaymentConfirmation(_ b: String) -> Bool {
+        if b.contains("refund") || b.contains("cashback") { return false }
+
+        let cardCtx = b.contains("credit card") || b.contains("cc bill") || b.contains("card bill") ||
+            b.contains("credit card account")
+
+        let billPay =
+            b.contains("payment received on your") ||
+            b.contains("payment received for your") ||
+            b.contains("payment has been received") ||
+            b.contains("we have received your payment") ||
+            b.contains("received your payment") ||
+            b.contains("thank you for your payment") ||
+            b.contains("thank you for the payment") ||
+            (b.contains("payment of") && b.contains("received")) ||
+            (b.contains("payment of") && b.contains("has been received")) ||
+            b.contains("payment towards your credit card") ||
+            (b.contains("payment towards your") && b.contains("card")) ||
+            b.contains("payment credited to your credit card") ||
+            (b.contains("credited to your credit card") && !b.contains("cashback")) ||
+            b.contains("your credit card payment has been received") ||
+            b.contains("credit card bill payment") ||
+            (b.contains("bill payment") && b.contains("credit card")) ||
+            (b.contains("credit card") && b.contains("payment received"))
+
+        return cardCtx && billPay
+    }
+
+    // ─────────────────────────────────────────────────────────
     // MARK: Main Entry Point (single transaction)
     // ─────────────────────────────────────────────────────────
     func parse(emailBody: String, sender: String, date: Date) -> Transaction? {
@@ -98,10 +157,18 @@ class EmailParserService {
             if b.contains(kw) { return nil }
         }
 
-        // Must look like a transaction email
-        let txnWords = ["debited","credited","transaction","payment",
-                        "inr","rs.","rs ","₹","used for","amount"]
+        // Must look like a transaction email (gate before amount/type — reduces noise, but
+        // missing keywords here drops real alerts; keep in sync with common bank templates).
+        let txnWords = ["debited", "credited", "transaction", "payment", "txn",
+                        "inr", "rs.", "rs ", "₹", "used for", "amount",
+                        "upi", "imps", "neft", "rtgs", "spent", "withdrawn", "purchase",
+                        "transferred", "mandate", "ach", "nach"]
         guard txnWords.contains(where: { b.contains($0) }) else { return nil }
+
+        // ── Reject CC bill-payment confirmations (not income / not card spend) ─────
+        // Banks word these many ways; "payment received" + card context often mis-read as credit.
+        // CCBillService tracks bill status from these separately.
+        if isCreditCardBillPaymentConfirmation(b) { return nil }
 
         guard let amount = extractAmount(body: cleaned) else { return nil }
         guard let type   = extractType(body: cleaned)   else { return nil }
@@ -147,23 +214,30 @@ class EmailParserService {
         let patterns: [(String, NSRegularExpression.Options)] = [
             // Multi-line Axis: "Amount Credited:\nINR 1.00"
             (#"[Aa]mount\s*(?:[Dd]ebited|[Cc]redited)\s*[:\-]?\s*\n\s*(?:INR|Rs\.?|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)"#, .dotMatchesLineSeparators),
-            // "credited with INR 2213.00" — Axis NEFT
+            // SMS-style: "debited Rs.500" / "spent INR 200" (same order as SMSParser)
+            (#"(?:debited|credited|spent|withdrawn|paid)\s+(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)"#, .caseInsensitive),
+            (#"(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)\s+(?:debited|credited|spent)"#, .caseInsensitive),
+            // "credited/debited with INR 2213.00" — Axis NEFT, SBI
             (#"(?:credited|debited)\s+with\s+(?:INR|Rs\.?|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)"#, []),
+            // ICICI: "a transaction of INR 139.00" — high priority before generic INR
+            (#"transaction\s+of\s+(?:INR|Rs\.?|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)"#, []),
+            // "for INR 500" / "for Rs. 500" — covers "used for INR X" constructs
+            (#"for\s+(?:INR|Rs\.?|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)"#, []),
             // "INR 120.00" or "INR120.00"
             (#"INR\s*([0-9,]+(?:\.[0-9]{1,2})?)"#, []),
-            // "Rs. 120" or "Rs 120"
-            (#"[Rr][Ss]\.?\s*([0-9,]+(?:\.[0-9]{1,2})?)"#, []),
-            // "₹120"
-            (#"₹\s*([0-9,]+(?:\.[0-9]{1,2})?)"#, []),
-            // "Amount Debited: 120.00"
-            (#"[Aa]mount\s*[Dd]ebited\s*[:\-]?\s*([0-9,]+(?:\.[0-9]{1,2})?)"#, []),
-            // "Amount: INR 120"
+            // "₹120" or "₹120/-"
+            (#"₹\s*([0-9,]+(?:\.[0-9]{1,2})?)(?:\s*\/\-?)?"#, []),
+            // "Rs. 120" or "Rs 120" or "Rs. 120/-"
+            (#"[Rr][Ss]\.?\s*([0-9,]+(?:\.[0-9]{1,2})?)(?:\s*\/\-?)?"#, []),
+            // "Amount Debited: 120.00" / "Amount Credited: 120"
+            (#"[Aa]mount\s*(?:[Dd]ebited|[Cc]redited)\s*[:\-]?\s*([0-9,]+(?:\.[0-9]{1,2})?)"#, []),
+            // "Amount: INR 120" / "Amount: 120"
             (#"[Aa]mount\s*[:\-]\s*(?:INR|Rs\.?)?\s*([0-9,]+(?:\.[0-9]{1,2})?)"#, []),
         ]
         for (p, opts) in patterns {
-            if let re    = try? NSRegularExpression(pattern: p, options: opts),
-               let match = re.firstMatch(in: b, range: NSRange(b.startIndex..., in: b)),
-               let range = Range(match.range(at: 1), in: b) {
+            if let compiled = Self.re(p, opts),
+               let match    = compiled.firstMatch(in: b, range: NSRange(b.startIndex..., in: b)),
+               let range    = Range(match.range(at: 1), in: b) {
                 let raw = String(b[range]).replacingOccurrences(of: ",", with: "")
                 if let v = Double(raw), v > 0 { return v }
             }
@@ -178,21 +252,35 @@ class EmailParserService {
         let b = body.lowercased()
 
         let debitWords = [
-            "was debited from your", "has been debited", "debited from",
-            "card.*used for", "has been used for", "purchase of",
-            "payment of", "spent", "withdrawn", "withdrawal",
-            "auto debit", "mandate",
-            // Axis Bank NEFT debit
-            "has been debited with"
+            // Strong multi-word phrases — checked first, high confidence
+            "was debited from your",  "has been debited from",  "debited from your",
+            "has been debited with",  "was debited with",       "debited from",
+            "has been debited",       "account.*?debited",
+            "card.*used for",         "has been used for",      "has been used at",
+            "has been used for a transaction",
+            "is used for",            "purchase of",
+            // SBI / generic: "payment has been made from your account"
+            "made from your",         "has been made on your",
+            "charged to your",        "debited for",
+            "spent",                  "withdrawn",              "withdrawal",
+            "auto debit",             "ach debit",              "nach debit",
+            "mandate executed",
+            // Bare-word fallback — only reached when no specific phrase matched
+            "\\bdebited\\b",
         ]
         let creditWords = [
-            "was credited", "has been credited", "credited to",
-            "received", "refund", "cashback", "reversed",
+            // Strong specific phrases
+            "was credited",           "has been credited",      "credited to",
+            "has been credited with", "credited with inr",      "amount credited",
             "salary credited",
-            // Axis Bank credit formats
-            "has been credited with",
-            "amount credited",
-            "credited with inr"
+            // Reversals and refunds
+            "reversed",              "refund",                  "cashback",
+            // Transfer receipts
+            "amount received",       "payment received",        "salary received",
+            "funds.*?received",      "money.*?received",
+            "neft received",         "imps received",           "upi received",
+            // Bare-word fallback
+            "\\bcredited\\b",
         ]
 
         for w in debitWords {
@@ -205,110 +293,187 @@ class EmailParserService {
     }
 
     // ─────────────────────────────────────────────────────────
-    // MARK: Merchant (V21 logic + multi-line + NEFT)
+    // MARK: Merchant Normalization
+    // Maps raw extracted names to canonical merchant/app names.
+    // Longest match wins — check longer aliases before shorter ones.
+    // ─────────────────────────────────────────────────────────
+    private let merchantAliases: [(pattern: String, canonical: String)] = [
+        // Payment apps
+        ("amazon pay",     "Amazon Pay"),
+        ("amazonpay",      "Amazon Pay"),
+        ("google pay",     "Google Pay"),
+        ("gpay",           "Google Pay"),
+        ("phonepe",        "PhonePe"),
+        ("paytm",          "Paytm"),
+        ("bhim",           "BHIM UPI"),
+        // E-commerce
+        ("amazon prime",   "Amazon Prime"),
+        ("amazon",         "Amazon"),
+        ("flipkart",       "Flipkart"),
+        ("myntra",         "Myntra"),
+        ("meesho",         "Meesho"),
+        ("ajio",           "Ajio"),
+        ("nykaa",          "Nykaa"),
+        ("tatacliq",       "TataCliq"),
+        // Food delivery
+        ("swiggy",         "Swiggy"),
+        ("zomato",         "Zomato"),
+        ("dominos",        "Domino's"),
+        ("domino",         "Domino's"),
+        ("mcdonalds",      "McDonald's"),
+        ("burger king",    "Burger King"),
+        ("kfc",            "KFC"),
+        ("subway",         "Subway"),
+        ("starbucks",      "Starbucks"),
+        // Grocery
+        ("bigbasket",      "BigBasket"),
+        ("blinkit",        "Blinkit"),
+        ("zepto",          "Zepto"),
+        ("dmart",          "D-Mart"),
+        ("reliance fresh", "Reliance Fresh"),
+        // Travel
+        ("irctc",          "IRCTC"),
+        ("uber eats",      "Uber Eats"),
+        ("uber",           "Uber"),
+        ("ola cabs",       "Ola"),
+        ("rapido",         "Rapido"),
+        ("makemytrip",     "MakeMyTrip"),
+        ("goibibo",        "Goibibo"),
+        ("redbus",         "RedBus"),
+        ("bookmyshow",     "BookMyShow"),
+        // Entertainment
+        ("netflix",        "Netflix"),
+        ("spotify",        "Spotify"),
+        ("hotstar",        "Hotstar"),
+        ("zee5",           "Zee5"),
+        ("sony liv",       "Sony LIV"),
+        // Fintech
+        ("zerodha",        "Zerodha"),
+        ("groww",          "Groww"),
+        ("upstox",         "Upstox"),
+    ]
+
+    private func normalizeMerchant(_ raw: String) -> String {
+        let lowered = raw.lowercased()
+        for (pattern, canonical) in merchantAliases {
+            if lowered.contains(pattern) { return canonical }
+        }
+        return raw
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // MARK: Merchant (V21 logic + multi-line + NEFT + normalization)
+    // Public wrapper applies canonical normalization after extraction.
     // ─────────────────────────────────────────────────────────
     func extractMerchant(body: String, sender: String) -> String {
+        return normalizeMerchant(rawExtractMerchant(body: body, sender: sender))
+    }
 
-        // Multi-line Axis: "Transaction Info:\nUPI/P2A/.../MAMTHA V/SBIN/UPI"
-        let mlUPI = #"[Tt]ransaction\s*[Ii]nfo\s*[:\-]?\s*\n\s*UPI/P2[AM]/\d+/([A-Za-z][A-Za-z0-9 ]{1,40})"#
-        if let re = try? NSRegularExpression(pattern: mlUPI, options: .dotMatchesLineSeparators),
-           let m  = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
-           let r  = Range(m.range(at: 1), in: body) {
-            let full = String(body[r]).trimmingCharacters(in: .whitespaces)
-            let name = full.components(separatedBy: "/").first ?? full
+    private func rawExtractMerchant(body: String, sender: String) -> String {
+        let r = NSRange(body.startIndex..., in: body)
+
+        // 1. Multi-line Axis: "Transaction Info:\nUPI/P2A/.../NAME/BANK/UPI"
+        if let m = Self.re(#"[Tt]ransaction\s*[Ii]nfo\s*[:\-]?\s*\n\s*UPI/P2[AM]/\d+/([A-Za-z][A-Za-z0-9 ]{1,40})"#, .dotMatchesLineSeparators)?.firstMatch(in: body, range: r),
+           let gr = Range(m.range(at: 1), in: body) {
+            let name = String(body[gr]).trimmingCharacters(in: .whitespaces).components(separatedBy: "/").first ?? ""
             if name.count > 1 { return beautify(name) }
         }
 
-        // Axis same-line: "UPI/P2A/517025145854/T DINAKARAN"
-        let axisUPI = #"UPI/P2[AM]/\d+/([A-Za-z ]{2,40})"#
-        if let re    = try? NSRegularExpression(pattern: axisUPI),
-           let match = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
-           let range = Range(match.range(at: 1), in: body) {
-            let full = String(body[range]).trimmingCharacters(in: .whitespaces)
-            let name = full.components(separatedBy: "/").first ?? full
+        // 2. UPI slash format: "UPI/P2A|P2M/REFNUM/NAME" (Axis, HDFC, SBI)
+        if let m = Self.re(#"UPI/P2[AM]/\d+/([A-Za-z][A-Za-z0-9 ]{1,40})"#)?.firstMatch(in: body, range: r),
+           let gr = Range(m.range(at: 1), in: body) {
+            let name = String(body[gr]).trimmingCharacters(in: .whitespaces).components(separatedBy: "/").first ?? ""
             if name.count > 1 { return beautify(name) }
         }
 
-        // ICICI: "UPI-912372950586-Mr MUTHU"
-        let icicUPI = #"UPI[-/]\d+[-/]([A-Za-z ]{2,40})"#
-        if let re    = try? NSRegularExpression(pattern: icicUPI),
-           let match = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
-           let range = Range(match.range(at: 1), in: body) {
-            let name = String(body[range]).trimmingCharacters(in: .whitespaces)
+        // 3. ICICI/HDFC UPI dash: "UPI-REFNUM-NAME" or "UPI/REFNUM/NAME"
+        if let m = Self.re(#"UPI[-/]\d{6,}[-/]([A-Za-z][A-Za-z0-9 ]{1,40})"#)?.firstMatch(in: body, range: r),
+           let gr = Range(m.range(at: 1), in: body) {
+            let name = String(body[gr]).trimmingCharacters(in: .whitespaces)
             if name.count > 1 { return beautify(name) }
         }
 
-        // Axis NEFT: "by NEFT/BOFAH26073000408/NOKI"
-        let neft = #"by\s+(?:NEFT|IMPS)/[A-Z0-9]+/([A-Za-z][A-Za-z0-9 &._\-]{1,40})"#
-        if let re = try? NSRegularExpression(pattern: neft, options: .caseInsensitive),
-           let m  = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
-           let r  = Range(m.range(at: 1), in: body) {
-            let n = String(body[r]).trimmingCharacters(in: .whitespaces)
+        // 4. NEFT/IMPS remitter: "by NEFT/REF/NAME" or "IMPS/REF/NAME"
+        if let m = Self.re(#"by\s+(?:NEFT|IMPS)/[A-Z0-9]+/([A-Za-z][A-Za-z0-9 &._\-]{1,40})"#, .caseInsensitive)?.firstMatch(in: body, range: r),
+           let gr = Range(m.range(at: 1), in: body) {
+            let n = String(body[gr]).trimmingCharacters(in: .whitespaces)
             if n.count > 1 { return beautify(n) }
         }
 
-        // Label patterns (V21)
-        let infoPatterns = [
-            #"[Tt]ransaction\s*[Ii]nfo\s*[:\-]\s*([A-Za-z][A-Za-z0-9 &._\-]{2,40})"#,
-            #"\bInfo\s*[:\-]\s*([A-Za-z][A-Za-z0-9 &._\-]{2,40})"#,
-            #"[Mm]erchant\s*[Nn]ame\s*[:\-]\s*([A-Za-z][A-Za-z0-9 &._\-]{2,40})"#,
-            #"[Dd]escription\s*[:\-]\s*([A-Za-z][A-Za-z0-9 &._\-]{2,40})"#,
-            #"[Rr]emarks?\s*[:\-]\s*([A-Za-z][A-Za-z0-9 &._\-]{2,40})"#,
-            #"(?:paid to|payment to|transferred to)\s+([A-Za-z][A-Za-z0-9 &._\-]{2,40})"#,
+        // 5. "has been used at/for MERCHANT for INR" — ICICI CC, SBI
+        if let m = Self.re(#"(?:has been used|was used|is used)\s+(?:at|for\s+purchase\s+at|for)\s+([A-Za-z][A-Za-z0-9 &._\-]{2,50})(?:\s+for\s+(?:INR|Rs|₹)|[.\n]|$)"#, .caseInsensitive)?.firstMatch(in: body, range: r),
+           let gr = Range(m.range(at: 1), in: body) {
+            let name = String(body[gr]).trimmingCharacters(in: .whitespaces)
+            if name.count > 2, !isGeneric(name) { return beautify(name) }
+        }
+
+        // 6. "at MERCHANT" pattern — "transaction at BIG BAZAAR" (HDFC, Kotak)
+        if let m = Self.re(#"(?:purchase|transaction|spent|payment)\s+at\s+([A-Za-z][A-Za-z0-9 &._\-]{2,50})(?=[.,\n]|\s+on|\s+for|\s+of|$)"#, .caseInsensitive)?.firstMatch(in: body, range: r),
+           let gr = Range(m.range(at: 1), in: body) {
+            let name = String(body[gr]).trimmingCharacters(in: .whitespaces)
+            if name.count > 2, !isGeneric(name) { return beautify(name) }
+        }
+
+        // 7. Label patterns: Info/Merchant Name/Description/Remarks/paid to
+        let labelPatterns: [(String, NSRegularExpression.Options)] = [
+            (#"[Tt]ransaction\s*[Ii]nfo\s*[:\-]\s*([A-Za-z][A-Za-z0-9 &._\-]{2,50})"#, []),
+            (#"\bInfo\s*[:\-]\s*([A-Za-z][A-Za-z0-9 &._\-]{2,50})"#, []),
+            (#"[Mm]erchant\s*(?:[Nn]ame)?\s*[:\-]\s*([A-Za-z][A-Za-z0-9 &._\-]{2,50})"#, []),
+            (#"[Dd]escription\s*[:\-]\s*([A-Za-z][A-Za-z0-9 &._\-]{2,50})"#, []),
+            (#"[Nn]arration\s*[:\-]\s*([A-Za-z][A-Za-z0-9 &._\-]{2,50})"#, []),
+            (#"[Rr]emarks?\s*[:\-]\s*([A-Za-z][A-Za-z0-9 &._\-]{2,50})"#, []),
+            (#"(?:paid to|payment to|transferred to|sent to)\s+([A-Za-z][A-Za-z0-9 &._\-]{2,50})"#, .caseInsensitive),
         ]
-        for pattern in infoPatterns {
-            if let re    = try? NSRegularExpression(pattern: pattern),
-               let match = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
-               let range = Range(match.range(at: 1), in: body) {
-                let candidate = String(body[range])
+        for (pattern, opts) in labelPatterns {
+            if let m  = Self.re(pattern, opts)?.firstMatch(in: body, range: r),
+               let gr = Range(m.range(at: 1), in: body) {
+                let candidate = String(body[gr])
                     .trimmingCharacters(in: .whitespaces)
                     .components(separatedBy: "\n").first ?? ""
-                if candidate.count > 2 && !isGeneric(candidate) {
-                    return beautify(candidate)
-                }
+                let clean = candidate.components(separatedBy: CharacterSet.alphanumerics
+                    .union(.init(charactersIn: " &._-")).inverted).joined()
+                    .trimmingCharacters(in: .whitespaces)
+                if clean.count > 2, !isGeneric(clean) { return beautify(clean) }
             }
         }
 
-        // ACH / bank transfer — "debited/credited ... by NAME"
-        // e.g. "debited with INR 48377.00 ... by ACH-DR-TP ACH ICICI BANK-2"
-        let byName = #"(?:debited|credited).{0,120}?\bby\s+([A-Za-z][A-Za-z0-9 &._\-]{2,50})(?=[.\n]|$)"#
-        if let re = try? NSRegularExpression(pattern: byName, options: .caseInsensitive),
-           let m  = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
-           let r  = Range(m.range(at: 1), in: body) {
-            let raw = String(body[r]).trimmingCharacters(in: .whitespaces)
-            if raw.count > 2, !isGeneric(raw) {
-                // For ACH entries like "ACH-DR-TP ACH ICICI BANK-2"
-                // extract just the bank name (last recognisable bank token)
-                let achClean = cleanACHMerchant(raw)
-                return beautify(achClean)
-            }
+        // 8. ACH / bank transfer: "debited ... by ACH-DR-TP ACH ICICI BANK-2"
+        if let m = Self.re(#"(?:debited|credited).{0,120}?\bby\s+([A-Za-z][A-Za-z0-9 &._\-]{2,50})(?=[.\n]|$)"#, .caseInsensitive)?.firstMatch(in: body, range: r),
+           let gr = Range(m.range(at: 1), in: body) {
+            let raw = String(body[gr]).trimmingCharacters(in: .whitespaces)
+            if raw.count > 2, !isGeneric(raw) { return beautify(cleanACHMerchant(raw)) }
         }
 
-        // UPI VPA before @
-        if let upi = smsParser.extractUPIId(body: body) {
+        // 9. UPI VPA before @: "swiggy@oksbi" → "Swiggy"
+        if let upi  = smsParser.extractUPIId(body: body) {
             let name = upi.components(separatedBy: "@").first ?? ""
             if name.count > 2 { return beautify(name) }
         }
 
         return smsParser.extractMerchant(body: body, sender: sender)
     }
+    // (end of rawExtractMerchant)
 
     // ─────────────────────────────────────────────────────────
     // MARK: Account
     // ─────────────────────────────────────────────────────────
     private func extractAccount(body: String) -> String? {
+        let nr = NSRange(body.startIndex..., in: body)
         let patterns: [(String, NSRegularExpression.Options)] = [
             // Multi-line: "Account Number:\nXX5171"
-            (#"[Aa]ccount\s*[Nn]umber\s*[:\-]?\s*\n\s*[Xx]{2}(\d{4})\b"#, .dotMatchesLineSeparators),
-            (#"[Aa]/[Cc]\.?\s*(?:no\.?)?\s*[Xx]{1,4}(\d{4})"#,            .caseInsensitive),
-            (#"[Cc]redit\s+[Cc]ard\s+[Xx]{2}(\d{4})"#,                    .caseInsensitive),
-            (#"[Cc]ard\s+[Xx]{2}(\d{4})"#,                                 .caseInsensitive),
-            (#"[Xx]{2,}(\d{4})\b"#,                                         .caseInsensitive),
+            (#"[Aa]ccount\s*[Nn]umber\s*[:\-]?\s*\n\s*[Xx]{2}(\d{4})\b"#,  .dotMatchesLineSeparators),
+            // "A/C No. XX1234" / "Ac No XX1234"
+            (#"[Aa][/.]?[Cc]\.?\s*[Nn]o\.?\s*[Xx]{1,4}(\d{4})"#,           .caseInsensitive),
+            // "Credit Card XX7001" / "Debit Card XX1234"
+            (#"(?:[Cc]redit|[Dd]ebit)\s+[Cc]ard\s+[Xx]{1,4}(\d{4})"#,      .caseInsensitive),
+            // "Card XX1234" / "card ending 1234"
+            (#"[Cc]ard\s+(?:[Xx]{1,4}|ending\s*)(\d{4})"#,                  .caseInsensitive),
+            // "XXXXXXXX1234" — generic masked number
+            (#"[Xx]{2,}(\d{4})\b"#,                                           .caseInsensitive),
         ]
         for (p, opts) in patterns {
-            if let re = try? NSRegularExpression(pattern: p, options: opts),
-               let m  = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
-               let r  = Range(m.range(at: 1), in: body) { return String(body[r]) }
+            if let m = Self.re(p, opts)?.firstMatch(in: body, range: nr),
+               let r = Range(m.range(at: 1), in: body) { return String(body[r]) }
         }
         return nil
     }
@@ -317,16 +482,18 @@ class EmailParserService {
     // MARK: Balance
     // ─────────────────────────────────────────────────────────
     private func extractBalance(body: String) -> Double? {
+        let nr = NSRange(body.startIndex..., in: body)
+        // Prefer account balance over credit limit lines
         let patterns = [
-            #"[Aa]vailable\s+[Cc]redit\s+[Ll]imit.*?INR\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
-            #"[Aa]vail(?:able)?\s+[Bb]al(?:ance)?\s*[:\-]?\s*(?:INR|Rs\.?)?\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
-            #"[Bb]alance\s*[:\-]\s*(?:INR|Rs\.?)?\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
+            #"[Aa]vail(?:able)?\s+[Bb]al(?:ance)?\s*[:\-]?\s*(?:INR|Rs\.?|₹)?\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
+            #"[Bb]alance\s+(?:after|is)\s*[:\-]?\s*(?:INR|Rs\.?|₹)?\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
+            #"[Bb]alance\s*[:\-]\s*(?:INR|Rs\.?|₹)?\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
+            #"[Aa]vailable\s+[Cc]redit\s+[Ll]imit.*?(?:INR|Rs\.?|₹)?\s*([0-9,]+(?:\.[0-9]{1,2})?)"#,
         ]
         for p in patterns {
-            if let re = try? NSRegularExpression(pattern: p, options: .dotMatchesLineSeparators),
-               let m  = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
-               let r  = Range(m.range(at: 1), in: body) {
-                let raw = String(body[r]).replacingOccurrences(of: ",", with: "")
+            if let m = Self.re(p, .dotMatchesLineSeparators)?.firstMatch(in: body, range: nr),
+               let rv = Range(m.range(at: 1), in: body) {
+                let raw = String(body[rv]).replacingOccurrences(of: ",", with: "")
                 if let v = Double(raw) { return v }
             }
         }
@@ -339,24 +506,26 @@ class EmailParserService {
     private func extractDate(body: String) -> Date? {
         let fmt = DateFormatter()
         fmt.locale = Locale(identifier: "en_US_POSIX")
+        let nr = NSRange(body.startIndex..., in: body)
 
         let pairs: [(String, [String])] = [
-            // "19-03-26, 19:12:44" — Axis short year
-            (#"(\d{2}-\d{2}-\d{2}),?\s+\d{2}:\d{2}:\d{2}"#, ["dd-MM-yy"]),
-            // "16-03-2026 at 15:34:13" — Axis NEFT full year
-            (#"(\d{2}-\d{2}-\d{4})\s+at\s+\d{2}:\d{2}:\d{2}"#, ["dd-MM-yyyy"]),
-            // "Mar 19, 2026 at 01:11:35" — ICICI
-            (#"([A-Za-z]{3}\s+\d{1,2},\s+\d{4})"#, ["MMM dd, yyyy"]),
-            // "19-03-2026"
-            (#"(\d{2}[-/]\d{2}[-/]\d{4})"#, ["dd-MM-yyyy","dd/MM/yyyy"]),
-            // "19 Mar 2026"
-            (#"(\d{1,2}\s+[A-Za-z]{3}\s+\d{4})"#, ["dd MMM yyyy"]),
+            // "19-03-26, 19:12:44" or "19-03-26 19:12:44" — Axis short year
+            (#"(\d{2}-\d{2}-\d{2})[,\s]+\d{2}:\d{2}(?::\d{2})?"#,       ["dd-MM-yy"]),
+            // "16-03-2026 at 15:34:13" or "16-03-2026 15:34" — Axis NEFT
+            (#"(\d{2}-\d{2}-\d{4})\s+(?:at\s+)?\d{2}:\d{2}"#,           ["dd-MM-yyyy"]),
+            // "Mar 19, 2026 at 01:11:35" / "Mar 19, 2026" — ICICI
+            (#"([A-Za-z]{3}\s+\d{1,2},\s+\d{4})"#,                       ["MMM dd, yyyy", "MMM d, yyyy"]),
+            // "19 Mar 2026" / "5 Jan 2026"
+            (#"(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})"#,                      ["dd MMM yyyy", "d MMMM yyyy", "dd MMMM yyyy"]),
+            // "19/03/2026" or "19-03-2026" (no time)
+            (#"(\d{2}[-/]\d{2}[-/]\d{4})"#,                               ["dd-MM-yyyy", "dd/MM/yyyy"]),
+            // "2026-03-19" — ISO format
+            (#"(\d{4}-\d{2}-\d{2})"#,                                      ["yyyy-MM-dd"]),
         ]
         for (p, formats) in pairs {
-            if let re = try? NSRegularExpression(pattern: p),
-               let m  = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
-               let r  = Range(m.range(at: 1), in: body) {
-                let ds = String(body[r])
+            if let m = Self.re(p)?.firstMatch(in: body, range: nr),
+               let rv = Range(m.range(at: 1), in: body) {
+                let ds = String(body[rv])
                 for f in formats {
                     fmt.dateFormat = f
                     if let d = fmt.date(from: ds) { return d }
@@ -371,9 +540,13 @@ class EmailParserService {
     // ─────────────────────────────────────────────────────────
     private func extractUPIRef(body: String) -> String? {
         if let vpa = smsParser.extractUPIId(body: body) { return vpa }
-        if let re  = try? NSRegularExpression(pattern: #"UPI[-/](\d{10,})"#),
-           let m   = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
-           let r   = Range(m.range(at: 0), in: body) { return String(body[r]) }
+        let nr = NSRange(body.startIndex..., in: body)
+        // "UPI/912345678901" or "UPI-912345678901" — numeric reference
+        if let m = Self.re(#"UPI[-/](\d{10,})"#)?.firstMatch(in: body, range: nr),
+           let r = Range(m.range(at: 0), in: body) { return String(body[r]) }
+        // IMPS / NEFT reference number as UPI fallback signal
+        if let m = Self.re(#"(?:IMPS|NEFT|RTGS)[/ ](\d{10,})"#)?.firstMatch(in: body, range: nr),
+           let r = Range(m.range(at: 0), in: body) { return String(body[r]) }
         return nil
     }
 
@@ -397,7 +570,7 @@ class EmailParserService {
             }
         }
         // Not a known bank — strip "ACH-DR", "NACH", "TP", trailing digits
-        var cleaned = raw
+        let cleaned = raw
             .replacingOccurrences(of: #"ACH[\-]?DR[\-]?TP\s*"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"NACH\s*"#, with: "", options: [.regularExpression, .caseInsensitive])
             .replacingOccurrences(of: #"ACH\s*"#, with: "", options: [.regularExpression, .caseInsensitive])
@@ -407,11 +580,20 @@ class EmailParserService {
     }
 
     private func isGeneric(_ s: String) -> Bool {
-        let stop = ["your","the","this","that","bank","account","card",
-                    "debit","credit","amount","balance","transaction",
-                    "rupees","inr","rs","dear","customer","summary",
-                    "enable","service","facility","online","domestic"]
-        return stop.contains(s.lowercased().trimmingCharacters(in: .whitespaces))
+        let t = s.lowercased().trimmingCharacters(in: .whitespaces)
+        let stop: Set<String> = [
+            "your","the","this","that","a","an",
+            "bank","account","card","debit","credit",
+            "amount","balance","transaction","payment",
+            "rupees","inr","rs","dear","customer","summary",
+            "enable","service","facility","online","domestic",
+            "mobile","number","details","info","information",
+            "regards","note","please","contact","helpline",
+            "neft","imps","rtgs","upi","ref","reference",
+        ]
+        // Also reject entries that are purely numeric or too short
+        return stop.contains(t) || t.count < 3 ||
+               t.allSatisfy({ $0.isNumber || $0 == "-" || $0 == "/" })
     }
 
     private func beautify(_ s: String) -> String {
@@ -423,14 +605,67 @@ class EmailParserService {
                 .joined(separator: " ")
     }
 
+    /// Strips trailing disclaimer/footer so `SMSParserService` does not reject the body for
+    /// phrases like "not authorised" that appear in successful txn emails.
+    private func bodyTrimmingTypicalBankEmailFooter(_ text: String) -> String {
+        let lines = text.components(separatedBy: "\n")
+        var kept: [String] = []
+        for line in lines {
+            let l = line.lowercased().trimmingCharacters(in: .whitespaces)
+            if l.hasPrefix("if you have not") || l.hasPrefix("if this transaction") ||
+                l.hasPrefix("if you did not") || l.hasPrefix("if this was not") {
+                break
+            }
+            if l.hasPrefix("disclaimer") || l == "regards" || l.hasPrefix("regards,") { break }
+            if l.hasPrefix("team —") || l.hasPrefix("team -") || l.hasPrefix("thanks,") { break }
+            kept.append(line)
+        }
+        let joined = kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return joined.isEmpty ? text : joined
+    }
+
     private func cleanText(_ text: String) -> String {
         var t = text
-        [("&amp;","&"),("&lt;","<"),("&gt;",">"),("&nbsp;"," "),
-         ("&quot;","\""),("&#39;","'"),("&rsquo;","'"),("&ndash;","-")]
-            .forEach { t = t.replacingOccurrences(of: $0.0, with: $0.1) }
+        // HTML entity decoding
+        let entities: [(String, String)] = [
+            ("&amp;","&"),("&lt;","<"),("&gt;",">"),
+            ("&nbsp;"," "),("&ensp;"," "),("&emsp;"," "),("\u{00A0}"," "),
+            ("&quot;","\""),("&#34;","\""),("&#39;","'"),("&apos;","'"),
+            ("&rsquo;","'"),("&lsquo;","'"),("&ndash;","-"),("&mdash;","-"),
+            ("&bull;"," "),("&middot;"," "),("&#8226;"," "),("&#183;"," "),
+            ("&hellip;","..."),("&#8230;","..."),
+            ("&raquo;",""),("&laquo;",""),("&#187;",""),("&#171;",""),
+        ]
+        entities.forEach { t = t.replacingOccurrences(of: $0.0, with: $0.1) }
+        // Numeric HTML entities: &#123; and &#x7B;
+        if let re = Self.re(#"&#x?([0-9A-Fa-f]+);"#) {
+            let range = NSRange(t.startIndex..., in: t)
+            let results = re.matches(in: t, range: range).reversed()
+            for m in results {
+                guard let mr = Range(m.range, in: t),
+                      let cr = Range(m.range(at: 1), in: t) else { continue }
+                let hex  = String(t[cr])
+                let base = hex.lowercased().hasPrefix("x") ? 16 : 10
+                let codeStr = hex.lowercased().hasPrefix("x") ? String(hex.dropFirst()) : hex
+                if let code = UInt32(codeStr, radix: base),
+                   let scalar = Unicode.Scalar(code) {
+                    t.replaceSubrange(mr, with: String(Character(scalar)))
+                }
+            }
+        }
+        // Normalise line endings and whitespace
         t = t.replacingOccurrences(of: "\r\n", with: "\n")
+        t = t.replacingOccurrences(of: "\r",   with: "\n")
         t = t.replacingOccurrences(of: "\t",   with: " ")
-        while t.contains("  ") { t = t.replacingOccurrences(of: "  ", with: " ") }
-        return t
+        // Collapse multiple spaces on the same line (not across newlines)
+        let lines = t.components(separatedBy: "\n").map { line -> String in
+            var l = line
+            while l.contains("  ") { l = l.replacingOccurrences(of: "  ", with: " ") }
+            return l.trimmingCharacters(in: .init(charactersIn: " "))
+        }
+        // Remove completely blank lines (3+ consecutive newlines → 1)
+        var result = lines.joined(separator: "\n")
+        while result.contains("\n\n\n") { result = result.replacingOccurrences(of: "\n\n\n", with: "\n\n") }
+        return result
     }
 }

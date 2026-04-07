@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import BackgroundTasks
 
 @main
@@ -6,7 +7,6 @@ struct SpendTrackerApp: App {
 
     @StateObject private var store      = TransactionStore()
     @StateObject private var smsService = SMSReaderService()
-    @StateObject private var gmail      = GmailService.shared
 
     init() {
         registerBackgroundTasks()
@@ -22,6 +22,15 @@ struct SpendTrackerApp: App {
                     smsService.startMonitoring()
                     scheduleBackgroundRefresh()
                 }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                    scheduleBackgroundRefresh()
+                    guard GmailService.shared.isConnected, !GmailService.shared.isFetching else { return }
+                    let interval: TimeInterval = 15 * 60
+                    let needsFetch = GmailService.shared.lastFetchDate.map { Date().timeIntervalSince($0) >= interval } ?? true
+                    if needsFetch {
+                        GmailService.shared.fetchBankEmails(store: store) { _ in }
+                    }
+                }
                 .onOpenURL { url in
                     handleIncomingURL(url)
                 }
@@ -36,12 +45,6 @@ struct SpendTrackerApp: App {
     // ─────────────────────────────────────────────────────────
     private func handleIncomingURL(_ url: URL) {
         let scheme = url.scheme?.lowercased() ?? ""
-
-        // Gmail OAuth callback
-        if scheme == "com.yourname.spendtracker" {
-            gmail.handleCallback(url: url)
-            return
-        }
 
         // SMS import via Shortcuts
         if scheme == "spendtracker" {
@@ -83,7 +86,7 @@ struct SpendTrackerApp: App {
         task.expirationHandler = { task.setTaskCompleted(success: false) }
 
         // Auto fetch Gmail in background
-        gmail.fetchBankEmails(store: store) { _ in
+        GmailService.shared.fetchBankEmails(store: store) { _ in
             task.setTaskCompleted(success: true)
         }
     }

@@ -1,9 +1,11 @@
+import AuthenticationServices
 import Foundation
+import Security
 import UIKit
 
 // MARK: - Gmail Service
 // Uses Gmail REST API (OAuth2) to fetch bank transaction emails
-class GmailService: ObservableObject {
+class GmailService: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
 
     static let shared = GmailService()
 
@@ -12,10 +14,13 @@ class GmailService: ObservableObject {
         UserDefaults.standard.string(forKey: "gmail_client_id") ?? "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
     }
     private let redirectURI   = "com.yourname.spendtracker:/oauth2callback"
-    private let scope         = "https://www.googleapis.com/auth/gmail.readonly"
+    // openid adds the id_token field to the token response, which is used
+    // to sign into Firebase Auth (required for Firestore security rules).
+    private let scope         = "https://www.googleapis.com/auth/gmail.readonly openid email"
     private let authEndpoint  = "https://accounts.google.com/o/oauth2/v2/auth"
     private let tokenEndpoint = "https://oauth2.googleapis.com/token"
     private let gmailAPI      = "https://gmail.googleapis.com/gmail/v1"
+    private var authSession: ASWebAuthenticationSession?
 
     // ── State ─────────────────────────────────────────────
     @Published var isConnected:   Bool   = false
@@ -28,24 +33,44 @@ class GmailService: ObservableObject {
     @Published var totalEmailCount: Int     = 0
     @Published var processedEmailCount: Int = 0
 
+    // ── OAuth tokens — stored in Keychain, never UserDefaults ─────
     private var accessToken: String? {
-        get { UserDefaults.standard.string(forKey: "gmail_access_token") }
-        set { UserDefaults.standard.set(newValue, forKey: "gmail_access_token") }
+        get { AppKeychain.read("access_token") }
+        set {
+            if let v = newValue { AppKeychain.save(v, key: "access_token") }
+            else                { AppKeychain.delete("access_token") }
+        }
     }
     private var refreshToken: String? {
-        get { UserDefaults.standard.string(forKey: "gmail_refresh_token") }
-        set { UserDefaults.standard.set(newValue, forKey: "gmail_refresh_token") }
+        get { AppKeychain.read("refresh_token") }
+        set {
+            if let v = newValue { AppKeychain.save(v, key: "refresh_token") }
+            else                { AppKeychain.delete("refresh_token") }
+        }
     }
+    // tokenExpiry is non-sensitive and small — kept in UserDefaults for simplicity
     private var tokenExpiry: Date? {
         get { UserDefaults.standard.object(forKey: "gmail_token_expiry") as? Date }
         set { UserDefaults.standard.set(newValue, forKey: "gmail_token_expiry") }
     }
 
-    private init() {
+    private override init() {
+        super.init()
+        // One-time migration: move any tokens previously stored in UserDefaults
+        // into the Keychain and delete the plaintext copies.
+        let ud = UserDefaults.standard
+        if let oldAccess = ud.string(forKey: "gmail_access_token") {
+            AppKeychain.save(oldAccess, key: "access_token")
+            ud.removeObject(forKey: "gmail_access_token")
+        }
+        if let oldRefresh = ud.string(forKey: "gmail_refresh_token") {
+            AppKeychain.save(oldRefresh, key: "refresh_token")
+            ud.removeObject(forKey: "gmail_refresh_token")
+        }
         isConnected = accessToken != nil && refreshToken != nil
-        userEmail   = UserDefaults.standard.string(forKey: "gmail_user_email") ?? ""
+        userEmail   = ud.string(forKey: "gmail_user_email") ?? ""
         // Restore "last fetched" display from persisted epoch
-        let epoch = UserDefaults.standard.double(forKey: "gmail_incremental_after")
+        let epoch = ud.double(forKey: "gmail_incremental_after")
         if epoch > 0 { lastFetchDate = Date(timeIntervalSince1970: epoch) }
     }
 
@@ -70,7 +95,15 @@ class GmailService: ObservableObject {
         if fullRescan || incrementalAfterEpoch == 0 {
             return "\(base) after:\(configuredStartYear)/01/01"
         }
-        let date = Date(timeIntervalSince1970: incrementalAfterEpoch)
+        var date = Date(timeIntervalSince1970: incrementalAfterEpoch)
+        // Overlap a few days: `after:` is exclusive of older mail — without overlap, anything
+        // received before the previous fetch's end time never appears in the next search
+        // (e.g. Axis ACH debit from yesterday missed after fetching today).
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC") ?? .current
+        if let rewound = cal.date(byAdding: .day, value: -4, to: date) {
+            date = rewound
+        }
         let fmt  = DateFormatter()
         fmt.dateFormat = "yyyy/MM/dd"
         fmt.timeZone   = TimeZone(identifier: "UTC")
@@ -107,10 +140,27 @@ class GmailService: ObservableObject {
             URLQueryItem(name: "prompt",        value: "consent"),
         ]
         guard let url = components.url else { return }
-        UIApplication.shared.open(url)
+        let session = ASWebAuthenticationSession(
+            url: url,
+            callbackURLScheme: "com.yourname.spendtracker"
+        ) { [weak self] callbackURL, error in
+            guard let self, error == nil, let callbackURL else { return }
+            self.handleCallback(url: callbackURL)
+        }
+        session.presentationContextProvider = self
+        session.prefersEphemeralWebBrowserSession = false
+        authSession = session
+        session.start()
     }
 
-    func handleCallback(url: URL) {
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow } ?? ASPresentationAnchor()
+    }
+
+    private func handleCallback(url: URL) {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let code = components.queryItems?.first(where: { $0.name == "code" })?.value
         else { return }
@@ -131,6 +181,7 @@ class GmailService: ObservableObject {
             guard let self, let data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { return }
+            let idToken = json["id_token"] as? String
             DispatchQueue.main.async {
                 if let a = json["access_token"]  as? String { self.accessToken  = a }
                 if let r = json["refresh_token"] as? String { self.refreshToken = r }
@@ -140,6 +191,13 @@ class GmailService: ObservableObject {
                 self.isConnected = true
                 self.fetchUserEmail()
                 self.fetchStatus = "Connected ✅"
+                // Sign into Firebase Auth so Firestore security rules can verify identity
+                if let idToken {
+                    FirestoreService.shared.signInWithGoogle(idToken: idToken) { success in
+                        if success { print("✅ Signed into Firebase Auth") }
+                        else       { print("⚠️ Firebase Auth sign-in failed — Firestore sync disabled") }
+                    }
+                }
             }
         }.resume()
     }
@@ -212,11 +270,13 @@ class GmailService: ObservableObject {
     // MARK: Fetch Bank Emails (v21 logic)
     // ─────────────────────────────────────────────────────
     private let bankQueries: [String] = [
-        "from:alerts@hdfcbank.net",
-        "from:noreply@hdfcbank.com",
+        "from:alerts@hdfcbank.bank.in",
+        "from:noreply@hdfcbank.bank.in",
         "from:credit_cards@icicibank.com",
         "from:autoemail@icicibank.com",
         "from:donotreply@icicibank.com",
+        "from:alerts@icicibank.com",
+        "from:noreply@icicibank.com",
         "from:sbiatm@sbi.co.in",
         "from:noreply@sbi.co.in",
         "from:alerts@axisbank.com",
@@ -237,6 +297,11 @@ class GmailService: ObservableObject {
         "subject:\"credit transaction alert\"",
         "subject:\"debit transaction alert\"",
         "subject:INR",
+        // CC statement & payment confirmation emails
+        "subject:\"credit card statement\"",
+        "subject:\"payment received on your\"",
+        "subject:\"payment received\" credit card",
+        "subject:\"you have done a UPI txn\"",
     ]
 
     func fetchBankEmails(store: TransactionStore, fullRescan: Bool = false, completion: @escaping (Int) -> Void) {
@@ -398,15 +463,30 @@ class GmailService: ObservableObject {
                     let date    = Date(timeIntervalSince1970: (Double(dateMs) ?? 0) / 1000)
                     let full    = subject + "\n" + body
 
-                    // Mark processed regardless of parse result so non-transaction
-                    // emails (e.g. account summaries) aren't retried every time.
-                    UserDefaults.standard.set(true, forKey: processedKey)
-
                     let txns = parser.parseAll(emailBody: full, sender: sender, date: date)
                     if !txns.isEmpty {
                         DispatchQueue.main.async { txns.forEach { store.addTransaction($0) } }
                         lock.lock(); count += txns.count; lock.unlock()
                     }
+
+                    // Mark processed so we don't re-download forever — except when the mail
+                    // looks like a txn alert but parsing failed (empty MIME body, parser gap).
+                    let trimmed = full.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let low     = full.lowercased()
+                    let score   = self.bankAlertSignalScore(full)
+                    let subj    = subject.lowercased()
+                    let subjectTxnCue = subj.contains("transaction alert") || subj.contains("debited") ||
+                        subj.contains("credited") || subj.contains("inr") || subj.contains("upi txn")
+                    let bodyMoneyCue = ["inr", "rs.", "rs ", "₹", "debited", "credited", "ach-dr", "nach "]
+                        .contains(where: { low.contains($0) })
+                    let looksLikeTxnMailButUnparsed = txns.isEmpty && !trimmed.isEmpty && score >= 3 &&
+                        (bodyMoneyCue || subjectTxnCue)
+                    if trimmed.isEmpty || !txns.isEmpty || !looksLikeTxnMailButUnparsed {
+                        UserDefaults.standard.set(true, forKey: processedKey)
+                    }
+
+                    // Track CC bill statement and payment-confirmation emails
+                    CCBillService.shared.processEmail(subject: subject, body: body, date: date)
 
                     lock.lock()
                     done += 1
@@ -443,7 +523,8 @@ class GmailService: ObservableObject {
     // ─────────────────────────────────────────────────────
     // MARK: Email Extraction
     // Recursively walks the MIME tree.
-    // Priority: text/plain > text/html > any nested text.
+    // multipart/alternative: many banks send a short useless text/plain ("View in browser")
+    // and put the real alert in text/html — we pick plain vs HTML by length + bank-keyword score.
     // This handles all common Gmail structures:
     //   multipart/alternative → [text/plain, text/html]
     //   multipart/mixed → [multipart/alternative, image/inline, ...]
@@ -452,6 +533,55 @@ class GmailService: ObservableObject {
     private func extractEmailContent(from json: [String: Any]) -> String {
         guard let payload = json["payload"] as? [String: Any] else { return "" }
         return extractTextFromPart(payload)
+    }
+
+    /// How much this chunk looks like an Indian bank alert (used to prefer HTML over stub plain).
+    private func bankAlertSignalScore(_ text: String) -> Int {
+        let b = text.lowercased()
+        var s = 0
+        for n in ["debited", "debit", "credited", "credit", "inr", "rs.", "rs ", "₹", "upi", "imps", "neft",
+                  "transaction", "a/c", "acct", "account", "available bal", "avl bal",
+                  "ach", "nach", "bank", "alert"] {
+            if b.contains(n) { s += 1 }
+        }
+        return s
+    }
+
+    private func chooseBestAlternativeBody(plain: String, html: String) -> String {
+        let p = plain.trimmingCharacters(in: .whitespacesAndNewlines)
+        let h = html.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sp = bankAlertSignalScore(p)
+        let sh = bankAlertSignalScore(h)
+        if sh > sp && h.count > 40 { return html }
+        if sp > sh && p.count > 40 { return plain }
+        if p.count >= 100 { return plain }
+        if h.count > p.count { return html }
+        return p.isEmpty ? html : plain
+    }
+
+    /// Gathers longest plain + HTML strings under a MIME subtree (nested alternative/related).
+    private func collectPlainAndHTML(from parts: [[String: Any]]) -> (plain: String, html: String) {
+        var bestPlain = ""
+        var bestHTML  = ""
+        for sub in parts {
+            let mime = sub["mimeType"] as? String ?? ""
+            if mime == "text/plain",
+               let body = sub["body"] as? [String: Any],
+               let data = body["data"] as? String {
+                let t = decodeBase64(data, isHTML: false)
+                if t.count > bestPlain.count { bestPlain = t }
+            } else if mime == "text/html",
+                      let body = sub["body"] as? [String: Any],
+                      let data = body["data"] as? String {
+                let t = decodeBase64(data, isHTML: true)
+                if t.count > bestHTML.count { bestHTML = t }
+            } else if let nested = sub["parts"] as? [[String: Any]] {
+                let (bp, bh) = collectPlainAndHTML(from: nested)
+                if bp.count > bestPlain.count { bestPlain = bp }
+                if bh.count > bestHTML.count { bestHTML = bh }
+            }
+        }
+        return (bestPlain, bestHTML)
     }
 
     private func extractTextFromPart(_ part: [String: Any]) -> String {
@@ -476,12 +606,10 @@ class GmailService: ObservableObject {
         // ── Multipart: recurse into children ──────────────
         guard let parts = part["parts"] as? [[String: Any]] else { return "" }
 
-        // For multipart/alternative prefer text/plain first
         if mime == "multipart/alternative" {
-            for sub in parts where (sub["mimeType"] as? String) == "text/plain" {
-                let t = extractTextFromPart(sub)
-                if !t.isEmpty { return t }
-            }
+            let (p, h) = collectPlainAndHTML(from: parts)
+            let chosen = chooseBestAlternativeBody(plain: p, html: h)
+            if !chosen.isEmpty { return chosen }
         }
         // Fallback: first child that yields non-empty text
         for sub in parts {

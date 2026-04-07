@@ -4,10 +4,14 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var store:      TransactionStore
     @EnvironmentObject var smsService: SMSReaderService
+    @ObservedObject private var firestore = FirestoreService.shared
     @State private var showClearAlert  = false
     @State private var showAddBudget   = false
     @State private var txnCount:   Int = 0
     @State private var monthCount: Int = 0
+    @State private var firebaseProjectID: String = ""
+    @State private var firebaseAPIKey:    String = ""
+    @State private var firebaseSaved:     Bool   = false
 
     var body: some View {
         NavigationView {
@@ -75,13 +79,70 @@ struct SettingsView: View {
                     HStack {
                         Text("Storage")
                         Spacer()
-                        Text("Local Only")
+                        Text(FirestoreService.shared.firebaseUID != nil ? "Local + Firebase" : "Local Only")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(FirestoreService.shared.firebaseUID != nil ? .green : .secondary)
                     }
                     Button(role: .destructive,
                            action: { showClearAlert = true }) {
                         Label("Clear All Data", systemImage: "trash")
+                    }
+                }
+
+                // ── Firebase Sync ─────────────────
+                Section(header: Text("Cloud Sync (Firebase)")) {
+                    if FirestoreService.shared.firebaseUID != nil {
+                        HStack {
+                            Image(systemName: "checkmark.icloud.fill")
+                                .foregroundColor(.green)
+                            Text("Syncing to Firebase")
+                                .foregroundColor(.green)
+                        }
+                    }
+                    TextField("Firebase Project ID", text: $firebaseProjectID)
+                        .autocapitalization(.none)
+                        .disableAutocorrection(true)
+                    SecureField("Web API Key", text: $firebaseAPIKey)
+                        .autocapitalization(.none)
+                        .disableAutocorrection(true)
+                    Button(action: saveFirebaseConfig) {
+                        Label(firebaseSaved ? "Saved ✅" : "Save Config",
+                              systemImage: firebaseSaved ? "checkmark.circle" : "icloud.and.arrow.up")
+                    }
+                    .disabled(firebaseProjectID.isEmpty || firebaseAPIKey.isEmpty)
+                }
+
+                // ── Firebase Debug Log ─────────────────
+                if !firestore.debugLogs.isEmpty {
+                    Section(header: HStack {
+                        Text("Firebase Log")
+                        Spacer()
+                        Button("Clear") { FirestoreService.shared.debugLogs.removeAll() }
+                            .font(.caption)
+                    }) {
+                        ForEach(firestore.debugLogs, id: \.self) { entry in
+                            Text(entry)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(entry.contains("❌") ? .red
+                                                 : entry.contains("✅") ? .green
+                                                 : .primary)
+                                .lineLimit(3)
+                        }
+                        Button("Test: Fetch from Firestore") {
+                            FirestoreService.shared.fetchAllTransactions { txns in
+                                _ = txns // result shown in log
+                            }
+                        }
+                        .foregroundColor(.blue)
+                    }
+                } else {
+                    Section(header: Text("Firebase Log")) {
+                        Button("Test: Fetch from Firestore") {
+                            FirestoreService.shared.fetchAllTransactions { txns in
+                                _ = txns
+                            }
+                        }
+                        .foregroundColor(.blue)
                     }
                 }
 
@@ -100,7 +161,9 @@ struct SettingsView: View {
                     HStack {
                         Text("Privacy")
                         Spacer()
-                        Text("No data uploaded")
+                        Text(FirestoreService.shared.firebaseUID != nil
+                             ? "Your Firebase only"
+                             : "No data uploaded")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -127,6 +190,20 @@ struct SettingsView: View {
     private func loadCounts() {
         txnCount   = store.transactions.count
         monthCount = store.transactions(for: Date()).count
+        firebaseProjectID = UserDefaults.standard.string(forKey: "firestore_project_id") ?? ""
+        firebaseAPIKey    = UserDefaults.standard.string(forKey: "firestore_api_key") ?? ""
+    }
+
+    private func saveFirebaseConfig() {
+        let pid = firebaseProjectID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = firebaseAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !pid.isEmpty, !key.isEmpty else { return }
+        UserDefaults.standard.set(pid, forKey: "firestore_project_id")
+        UserDefaults.standard.set(key, forKey: "firestore_api_key")
+        withAnimation { firebaseSaved = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            withAnimation { self.firebaseSaved = false }
+        }
     }
 }
 

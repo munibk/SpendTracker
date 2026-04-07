@@ -6,6 +6,9 @@ struct ContentView: View {
     @EnvironmentObject var smsService: SMSReaderService
     @State private var selectedTab = 0
 
+    /// While the app stays in the foreground, poll Gmail on a fixed interval (BG refresh is best-effort only).
+    private let gmailFetchTimer = Timer.publish(every: 15 * 60, tolerance: 60, on: .main, in: .common).autoconnect()
+
     var body: some View {
         TabView(selection: $selectedTab) {
             DashboardView()
@@ -26,27 +29,38 @@ struct ContentView: View {
                 }
                 .tag(2)
 
+            CreditCardView()
+                .tabItem {
+                    Label("Credit Card", systemImage: "creditcard.fill")
+                }
+                .tag(3)
+
             GmailView()
                 .tabItem {
                     Label("Gmail", systemImage: "envelope.fill")
                 }
-                .tag(3)
+                .tag(4)
 
             ReportsView()
                 .tabItem {
                     Label("Reports", systemImage: "doc.text.fill")
                 }
-                .tag(4)
+                .tag(5)
 
             SettingsView()
                 .tabItem {
                     Label("Settings", systemImage: "gearshape.fill")
                 }
-                .tag(5)
+                .tag(6)
         }
         .accentColor(Color(hex: "#6C63FF"))
         .onAppear {
             NotificationService.shared.requestPermission()
+        }
+        .onReceive(gmailFetchTimer) { _ in
+            guard GmailService.shared.isConnected else { return }
+            guard !GmailService.shared.isFetching else { return }
+            GmailService.shared.fetchBankEmails(store: store) { _ in }
         }
     }
 }
